@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Coruscant City Simulation</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #000; font-family: "Segoe UI", system-ui, sans-serif; color: #c8d8f0; overflow: hidden; }
+canvas { display: block; }
+
+#hud {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  pointer-events: none; z-index: 10;
+}
+
+/* Top bar */
+#topbar {
+  position: fixed; top: 0; left: 0; right: 0;
+  background: linear-gradient(to bottom, rgba(5,10,22,0.95), transparent);
+  padding: 12px 20px 20px;
+  display: flex; align-items: center; gap: 16px;
+  pointer-events: auto;
+}
+#topbar h1 {
+  font-size: 15px; font-weight: 700; letter-spacing: 2px;
+  color: #ffd060; text-transform: uppercase; flex-shrink: 0;
+}
+#topbar .back {
+  font-size: 11px; color: #88aacc; text-decoration: none;
+  border: 1px solid rgba(136,170,204,0.3); padding: 4px 10px; border-radius: 6px;
+  transition: background 0.2s;
+}
+#topbar .back:hover { background: rgba(136,170,204,0.15); }
+#cycleLabel {
+  font-size: 11px; color: #7799bb; margin-left: auto;
+  letter-spacing: 1px;
+}
+
+/* Scenario selector */
+#scenarioBar {
+  position: fixed; top: 52px; left: 20px;
+  display: flex; gap: 8px; pointer-events: auto;
+}
+.scenario-btn {
+  font-size: 10px; font-weight: 600; letter-spacing: 0.8px;
+  padding: 5px 12px; border-radius: 8px; border: none; cursor: pointer;
+  text-transform: uppercase; transition: all 0.18s;
+  background: rgba(30,45,70,0.85); color: #88aacc;
+  border: 1px solid rgba(80,120,180,0.25);
+}
+.scenario-btn.active { background: rgba(255,200,60,0.2); color: #ffd060; border-color: rgba(255,200,60,0.5); }
+.scenario-btn:hover { background: rgba(80,120,180,0.2); }
+
+/* Controls sidebar */
+#sidebar {
+  position: fixed; right: 0; top: 0; bottom: 0; width: 240px;
+  background: rgba(5,10,22,0.88); border-left: 1px solid rgba(40,70,110,0.4);
+  backdrop-filter: blur(14px); padding: 60px 16px 16px;
+  display: flex; flex-direction: column; gap: 10px;
+  overflow-y: auto; pointer-events: auto;
+}
+#sidebar h2 {
+  font-size: 10px; font-weight: 700; letter-spacing: 1.5px; color: #5577aa;
+  text-transform: uppercase; margin-bottom: 4px; margin-top: 8px;
+}
+.ctrl-row { display: flex; flex-direction: column; gap: 4px; }
+.ctrl-row label { font-size: 10px; color: #88aacc; display: flex; justify-content: space-between; }
+.ctrl-row input[type=range] {
+  width: 100%; height: 4px; cursor: pointer;
+  accent-color: #ffd060;
+}
+
+/* KPI cards */
+#kpi-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
+}
+.kpi-card {
+  background: rgba(15,25,50,0.7); border: 1px solid rgba(40,70,110,0.4);
+  border-radius: 8px; padding: 8px 10px;
+}
+.kpi-card .k-label { font-size: 9px; color: #5577aa; text-transform: uppercase; letter-spacing: 0.8px; }
+.kpi-card .k-val {
+  font-size: 16px; font-weight: 700; margin-top: 2px;
+}
+
+/* Legend */
+#legend {
+  position: fixed; bottom: 20px; left: 20px;
+  background: rgba(5,10,22,0.85); border: 1px solid rgba(40,70,110,0.3);
+  border-radius: 10px; padding: 12px 16px; pointer-events: none;
+}
+#legend h3 { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: #5577aa; margin-bottom: 6px; }
+.legend-row { display: flex; align-items: center; gap: 6px; font-size: 10px; color: #88aacc; margin: 2px 0; }
+.legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+/* Overlay buttons */
+#overlayBar {
+  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 8px; pointer-events: auto;
+}
+.overlay-btn {
+  font-size: 10px; padding: 6px 14px; border-radius: 8px; cursor: pointer;
+  background: rgba(15,25,50,0.85); color: #88aacc;
+  border: 1px solid rgba(40,70,110,0.4); transition: all 0.18s;
+}
+.overlay-btn.active { background: rgba(60,120,220,0.3); color: #aad4ff; border-color: rgba(60,120,220,0.5); }
+.overlay-btn:hover { background: rgba(40,80,160,0.3); }
+
+/* District tooltip */
+#tooltip {
+  position: fixed; display: none;
+  background: rgba(5,10,22,0.92); border: 1px solid rgba(255,200,60,0.3);
+  border-radius: 10px; padding: 12px 16px; min-width: 180px;
+  pointer-events: none; z-index: 20; backdrop-filter: blur(10px);
+}
+#tooltip .tt-name { font-size: 14px; font-weight: 700; color: #ffd060; }
+#tooltip .tt-tier { font-size: 10px; color: #88aacc; text-transform: uppercase; letter-spacing: 1px; margin: 3px 0 8px; }
+.tt-bar-row { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+.tt-bar-label { font-size: 9px; color: #5577aa; width: 60px; }
+.tt-bar-bg { flex: 1; height: 4px; background: rgba(40,70,110,0.4); border-radius: 2px; }
+.tt-bar-fill { height: 4px; border-radius: 2px; transition: width 0.4s; }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="hud">
+
+  <div id="topbar">
+    <a href="./index.html" class="back">← Globe</a>
+    <a href="./city_levels.html" class="back">⬛ Vertical Levels</a>
+    <h1>Coruscant · City Simulation</h1>
+    <span id="cycleLabel">Cycle 0</span>
+  </div>
+
+  <div id="scenarioBar">
+    <button class="scenario-btn active" data-sc="baseline">Baseline</button>
+    <button class="scenario-btn" data-sc="energy_crisis">Energy Crisis</button>
+    <button class="scenario-btn" data-sc="water_deficit">Water Deficit</button>
+    <button class="scenario-btn" data-sc="security">Heightened Security</button>
+  </div>
+
+  <div id="sidebar">
+    <h2>Global Policy</h2>
+    <div class="ctrl-row">
+      <label>Energy Supply <span id="lEnergy">1.0</span></label>
+      <input type="range" id="sEnergy" min="0.2" max="2.0" step="0.05" value="1.0">
+    </div>
+    <div class="ctrl-row">
+      <label>Water Recycling <span id="lWater">0.5</span></label>
+      <input type="range" id="sWater" min="0.0" max="1.0" step="0.05" value="0.5">
+    </div>
+    <div class="ctrl-row">
+      <label>Security Budget <span id="lSec">0.5</span></label>
+      <input type="range" id="sSec" min="0.0" max="1.0" step="0.05" value="0.5">
+    </div>
+    <div class="ctrl-row">
+      <label>Cooling Infra <span id="lCool">0.5</span></label>
+      <input type="range" id="sCool" min="0.0" max="1.0" step="0.05" value="0.5">
+    </div>
+
+    <h2>System KPIs</h2>
+    <div id="kpi-grid">
+      <div class="kpi-card">
+        <div class="k-label">Avg Temp</div>
+        <div class="k-val" id="kTemp" style="color:#ff9944">–</div>
+      </div>
+      <div class="kpi-card">
+        <div class="k-label">Productivity</div>
+        <div class="k-val" id="kProd" style="color:#66dd88">–</div>
+      </div>
+      <div class="kpi-card">
+        <div class="k-label">High Unrest</div>
+        <div class="k-val" id="kUnrest" style="color:#ff4444">–</div>
+      </div>
+      <div class="kpi-card">
+        <div class="k-label">Water Stress</div>
+        <div class="k-val" id="kWater" style="color:#44aaff">–</div>
+      </div>
+    </div>
+
+    <h2>Simulation</h2>
+    <div class="ctrl-row">
+      <label>Speed <span id="lSpeed">2</span> ticks/s</label>
+      <input type="range" id="sSpeed" min="1" max="10" step="1" value="2">
+    </div>
+    <button class="scenario-btn" id="btnPause" style="width:100%;margin-top:4px">⏸ Pause</button>
+    <button class="scenario-btn" id="btnReset" style="width:100%;margin-top:4px">↺ Reset</button>
+  </div>
+
+  <div id="legend">
+    <h3>Unrest overlay</h3>
+    <div class="legend-row"><div class="legend-dot" style="background:#44dd88"></div> Stable (&lt;0.3)</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#ffcc44"></div> Stressed (0.3–0.6)</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#ff4422"></div> Rioting (&gt;0.6)</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#88aaff"></div> Senate/Jedi</div>
+  </div>
+
+  <div id="overlayBar">
+    <button class="overlay-btn active" data-ov="unrest">Unrest</button>
+    <button class="overlay-btn" data-ov="energy">Energy</button>
+    <button class="overlay-btn" data-ov="water">Water Stress</button>
+    <button class="overlay-btn" data-ov="temp">Temperature</button>
+    <button class="overlay-btn" data-ov="none">Default</button>
+  </div>
+
+  <div id="tooltip">
+    <div class="tt-name" id="ttName"></div>
+    <div class="tt-tier" id="ttTier"></div>
+    <div class="tt-bar-row"><div class="tt-bar-label">Energy</div><div class="tt-bar-bg"><div class="tt-bar-fill" id="ttEnergy" style="background:#ffaa44"></div></div></div>
+    <div class="tt-bar-row"><div class="tt-bar-label">Water</div><div class="tt-bar-bg"><div class="tt-bar-fill" id="ttWater" style="background:#44aaff"></div></div></div>
+    <div class="tt-bar-row"><div class="tt-bar-label">Unrest</div><div class="tt-bar-bg"><div class="tt-bar-fill" id="ttUnrest" style="background:#ff4444"></div></div></div>
+    <div class="tt-bar-row"><div class="tt-bar-label">Productivity</div><div class="tt-bar-bg"><div class="tt-bar-fill" id="ttProd" style="background:#66dd88"></div></div></div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.164.1/build/three.module.js",
+    "three/examples/jsm/controls/OrbitControls.js": "https://unpkg.com/three@0.164.1/examples/jsm/controls/OrbitControls.js"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+
+// ============================================================
+// DISTRICTS — 8 lore-accurate zones
+// ============================================================
+const DISTRICTS = [
+  { id: 0, name: "Senate District",       tier: "Upper City",  row: 2, col: 4, color: [1.00, 0.80, 0.26], infra: 0.95, popDens: 0.80 },
+  { id: 1, name: "Jedi Temple",           tier: "Upper City",  row: 1, col: 6, color: [0.53, 0.80, 1.00], infra: 0.90, popDens: 0.50 },
+  { id: 2, name: "500 Republica",         tier: "Upper City",  row: 1, col: 2, color: [1.00, 0.67, 0.40], infra: 0.98, popDens: 0.60 },
+  { id: 3, name: "CoCo Town",             tier: "Mid-Level",   row: 3, col: 5, color: [1.00, 0.53, 0.27], infra: 0.70, popDens: 0.90 },
+  { id: 4, name: "Level 1313",            tier: "Underworld",  row: 5, col: 3, color: [0.80, 0.27, 0.27], infra: 0.20, popDens: 0.99 },
+  { id: 5, name: "Industrial Sector",     tier: "Lower City",  row: 5, col: 6, color: [0.80, 0.60, 0.27], infra: 0.55, popDens: 0.75 },
+  { id: 6, name: "Alien Quarters",        tier: "Mid-Level",   row: 3, col: 1, color: [0.40, 0.67, 0.53], infra: 0.60, popDens: 0.95 },
+  { id: 7, name: "Galactic City Center",  tier: "Apex",        row: 2, col: 2, color: [1.00, 1.00, 1.00], infra: 0.99, popDens: 0.70 },
+];
+
+const TIER_HEIGHT = { "Apex": 7.5, "Upper City": 5.5, "Mid-Level": 3.0, "Lower City": 1.8, "Underworld": 1.2 };
+const TIER_DENSITY = { "Apex": 0.72, "Upper City": 0.65, "Mid-Level": 0.55, "Lower City": 0.50, "Underworld": 0.70 };
+
+// ============================================================
+// SIMULATION STATE
+// ============================================================
+const SIM_STEPS = 3000;
+
+function initState(scenario) {
+  return DISTRICTS.map((d) => {
+    const base = {
+      population_density: d.popDens,
+      infrastructure:     d.infra,
+      energy_load:        0.5 + d.popDens * 0.3,
+      water_stress:       0.2 + (1 - d.infra) * 0.4,
+      temperature:        30 + d.popDens * 15,
+      security_index:     d.infra * 0.7 + 0.2,
+      unrest:             (1 - d.infra) * 0.35,
+      productivity:       d.infra * 0.8,
+    };
+
+    if (scenario === "energy_crisis") {
+      base.energy_load += 0.35;
+      base.unrest += 0.15;
+    } else if (scenario === "water_deficit") {
+      base.water_stress += 0.40;
+      base.temperature  += 12;
+      base.unrest += 0.20;
+    } else if (scenario === "security") {
+      base.security_index = Math.min(1.0, base.security_index + 0.30);
+      base.unrest = Math.max(0, base.unrest - 0.15);
+    }
+    return base;
+  });
+}
+
+let scenario = "baseline";
+let state = initState(scenario);
+let cycle = 0;
+let paused = false;
+let policy = { energy: 1.0, water: 0.5, security: 0.5, cooling: 0.5 };
+
+function simStep() {
+  const alpha = 0.05, beta = 0.04;
+  const c1 = 0.15, c2 = 0.08, c3 = 0.12;
+  const dt = 0.1;
+
+  state = state.map((s, i) => {
+    const d = DISTRICTS[i];
+    const eff_energy = s.energy_load / (policy.energy + 0.01);
+    const demand_w   = s.population_density * 0.8;
+    const recycle    = policy.water * 0.5;
+    const inequality = (1 - d.infra) * 0.6;
+
+    const energy_load = clamp(s.energy_load + dt * (
+      s.population_density * 0.04 - policy.energy * 0.06
+    ), 0.1, 2.0);
+
+    const temperature = clamp(s.temperature + dt * (
+      alpha * eff_energy - beta * policy.cooling
+    ), 15, 80);
+
+    const water_stress = clamp(s.water_stress + dt * (
+      demand_w * 0.05 - recycle * 0.08 + Math.max(0, temperature - 50) * 0.002
+    ), 0, 1);
+
+    const unrest = clamp(s.unrest + dt * (
+      c1 * water_stress + c2 * inequality - c3 * policy.security - 0.03
+    ), 0, 1);
+
+    const productivity = clamp(
+      s.productivity * 0.99 + dt * (d.infra * 0.04 * (1 - unrest)), 0, 1
+    );
+
+    return { ...s, energy_load, temperature, water_stress, unrest, productivity };
+  });
+  cycle++;
+}
+
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+// ============================================================
+// THREE.JS SCENE
+// ============================================================
+const canvas = document.getElementById("scene");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.6;
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x060a14, 0.022);
+scene.background = new THREE.Color(0x020508);
+
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 600);
+camera.position.set(0, 65, 55);
+camera.lookAt(0, 0, 0);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.maxPolarAngle = Math.PI * 0.5;
+controls.minDistance = 8;
+controls.maxDistance = 200;
+controls.target.set(0, 0, 0);
+
+// Lighting
+const ambient = new THREE.AmbientLight(0x1a2a4a, 3.5);
+scene.add(ambient);
+const sun = new THREE.DirectionalLight(0xffd080, 1.5);
+sun.position.set(80, 120, 60);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.near = 1;
+sun.shadow.camera.far = 400;
+sun.shadow.camera.left = -120;
+sun.shadow.camera.right = 120;
+sun.shadow.camera.top = 120;
+sun.shadow.camera.bottom = -120;
+scene.add(sun);
+const rimLight = new THREE.DirectionalLight(0x2244aa, 0.4);
+rimLight.position.set(-60, 40, -80);
+scene.add(rimLight);
+
+// ============================================================
+// CITY GRID LAYOUT
+// ============================================================
+const GRID_W = 9, GRID_H = 8;
+const BLOCK = 14;     // world units per block
+const CELL = 1.6;     // world units per building cell within block
+const DISTRICT_MAP = new Array(GRID_H).fill(null).map(() => new Array(GRID_W).fill(-1));
+DISTRICTS.forEach((d) => {
+  if (d.row < GRID_H && d.col < GRID_W) DISTRICT_MAP[d.row][d.col] = d.id;
+});
+
+// Ground plane
+const groundGeo = new THREE.PlaneGeometry(GRID_W * BLOCK + 40, GRID_H * BLOCK + 40);
+const groundMat = new THREE.MeshStandardMaterial({ color: 0x0a0d16, metalness: 0.1, roughness: 0.95 });
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// Grid lines (streets)
+const streetMat = new THREE.LineBasicMaterial({ color: 0x1a2a44, transparent: true, opacity: 0.5 });
+const streetGeo = new THREE.BufferGeometry();
+const streetVerts = [];
+for (let r = 0; r <= GRID_H; r++) {
+  const z = (r - GRID_H / 2) * BLOCK;
+  streetVerts.push(-(GRID_W / 2) * BLOCK, 0.05, z, (GRID_W / 2) * BLOCK, 0.05, z);
+}
+for (let c = 0; c <= GRID_W; c++) {
+  const x = (c - GRID_W / 2) * BLOCK;
+  streetVerts.push(x, 0.05, -(GRID_H / 2) * BLOCK, x, 0.05, (GRID_H / 2) * BLOCK);
+}
+streetGeo.setAttribute("position", new THREE.Float32BufferAttribute(streetVerts, 3));
+scene.add(new THREE.LineSegments(streetGeo, streetMat));
+
+// ============================================================
+// INSTANCED BUILDINGS
+// Each district block has its own InstancedMesh for easy recoloring
+// ============================================================
+const BUILDINGS_PER_BLOCK = 7 * 7;   // 7×7 grid per block
+const buildingMeta = [];   // [{ districtId, dummy }]
+
+// One InstancedMesh per district
+const districtMeshes = DISTRICTS.map((d) => {
+  const geo = new THREE.BoxGeometry(1, 1, 1);
+  const mat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(...d.color).multiplyScalar(0.4),
+    emissive: new THREE.Color(...d.color).multiplyScalar(0.08),
+    metalness: 0.35,
+    roughness: 0.60,
+  });
+  const mesh = new THREE.InstancedMesh(geo, mat, BUILDINGS_PER_BLOCK);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  scene.add(mesh);
+  return mesh;
+});
+
+// Per-instance metadata for raycasting
+const instanceToDistrict = {};   // instanceId_of_mesh -> districtId
+
+const dummy = new THREE.Object3D();
+const instanceColors = DISTRICTS.map(() => []);
+
+// Place buildings
+DISTRICTS.forEach((d) => {
+  const bx = (d.col - GRID_W / 2 + 0.5) * BLOCK;
+  const bz = (d.row - GRID_H / 2 + 0.5) * BLOCK;
+  const maxH = TIER_HEIGHT[d.tier] || 3.0;
+  const density = TIER_DENSITY[d.tier] || 0.55;
+  const N = 7;
+  let inst = 0;
+  for (let ri = 0; ri < N; ri++) {
+    for (let ci = 0; ci < N; ci++) {
+      if (Math.random() > density) { inst++; continue; }
+      const h = 0.4 + Math.pow(Math.random(), 1.3) * maxH;
+      const w = 0.6 + Math.random() * 0.8;
+      const depth = 0.6 + Math.random() * 0.8;
+      const ox = (ci - N / 2 + 0.5) * CELL * 1.1;
+      const oz = (ri - N / 2 + 0.5) * CELL * 1.1;
+      dummy.position.set(bx + ox, h / 2, bz + oz);
+      dummy.scale.set(w, h, depth);
+      dummy.rotation.y = (Math.random() - 0.5) * 0.2;
+      dummy.updateMatrix();
+      districtMeshes[d.id].setMatrixAt(inst, dummy.matrix);
+      instanceColors[d.id].push([1, 1, 1]);
+      instanceToDistrict[`${d.id}_${inst}`] = d.id;
+      inst++;
+    }
+  }
+  // Fill remaining slots with scale=0 (hidden)
+  while (inst < BUILDINGS_PER_BLOCK) {
+    dummy.position.set(0, -1000, 0);
+    dummy.scale.set(0.001, 0.001, 0.001);
+    dummy.updateMatrix();
+    districtMeshes[d.id].setMatrixAt(inst, dummy.matrix);
+    inst++;
+  }
+  districtMeshes[d.id].instanceMatrix.needsUpdate = true;
+});
+
+// ============================================================
+// DISTRICT LABELS (DOM)
+// ============================================================
+const labelEls = DISTRICTS.map((d) => {
+  const el = document.createElement("div");
+  el.style.cssText = `
+    position:fixed; pointer-events:none; font-size:9px; font-weight:700;
+    letter-spacing:1.2px; text-transform:uppercase; white-space:nowrap;
+    color:rgba(${d.color.map(c=>Math.round(c*255)).join(",")},0.9);
+    text-shadow:0 0 8px rgba(0,0,0,0.9),0 0 16px rgba(0,0,0,0.8);
+    padding:2px 6px; background:rgba(0,0,0,0.5); border-radius:4px;
+    transition:opacity 0.3s;
+  `;
+  el.textContent = d.name;
+  document.body.appendChild(el);
+  return el;
+});
+
+// ============================================================
+// SPEEDER LANES — particle streams between adjacent districts
+// ============================================================
+const LANES = [
+  [0, 3], [0, 7], [1, 0], [1, 7], [2, 7], [2, 0], [3, 4], [3, 6],
+  [4, 5], [5, 7], [6, 3], [7, 2],
+];
+
+const laneParticles = [];
+const laneParticleMat = new THREE.MeshBasicMaterial({ color: 0xffcc44 });
+const laneParticleGeo = new THREE.SphereGeometry(0.18, 5, 5);
+
+const laneMeshes = [];
+LANES.forEach(([a, b]) => {
+  const da = DISTRICTS[a], db = DISTRICTS[b];
+  const ax = (da.col - GRID_W / 2 + 0.5) * BLOCK;
+  const az = (da.row - GRID_H / 2 + 0.5) * BLOCK;
+  const bx = (db.col - GRID_W / 2 + 0.5) * BLOCK;
+  const bz = (db.row - GRID_H / 2 + 0.5) * BLOCK;
+  const h = 1.2 + Math.random() * 1.5;
+
+  // Line visual
+  const pts = [new THREE.Vector3(ax, h, az), new THREE.Vector3(bx, h, bz)];
+  const lineGeo = new THREE.BufferGeometry().setFromPoints(pts);
+  const lineMesh = new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color: 0x1a3366, transparent: true, opacity: 0.35 }));
+  scene.add(lineMesh);
+  laneMeshes.push(lineMesh);
+
+  // Particles traveling along lane
+  const numP = 3 + Math.floor(Math.random() * 4);
+  for (let k = 0; k < numP; k++) {
+    const pm = new THREE.Mesh(laneParticleGeo, laneParticleMat.clone());
+    scene.add(pm);
+    laneParticles.push({
+      mesh: pm,
+      ax, az, bx, bz, h,
+      t: Math.random(),
+      speed: 0.004 + Math.random() * 0.006,
+      dir: Math.random() < 0.5 ? 1 : -1,
+    });
+  }
+});
+
+// ============================================================
+// OVERLAY COLOR SYSTEM
+// ============================================================
+let currentOverlay = "unrest";
+
+function overlayColor(districtIdx, overlay) {
+  const s = state[districtIdx];
+  const d = DISTRICTS[districtIdx];
+  if (overlay === "none") return new THREE.Color(...d.color).multiplyScalar(0.45);
+
+  let v;
+  if (overlay === "unrest")  v = s.unrest;
+  else if (overlay === "energy") v = clamp((s.energy_load - 0.3) / 1.5, 0, 1);
+  else if (overlay === "water")  v = s.water_stress;
+  else if (overlay === "temp")   v = clamp((s.temperature - 20) / 60, 0, 1);
+
+  if (overlay === "unrest" || overlay === "water") {
+    if (v < 0.3) return new THREE.Color(0.27, 0.87, 0.53);
+    if (v < 0.6) return new THREE.Color(1.0, 0.80, 0.27);
+    return new THREE.Color(1.0, 0.27, 0.14);
+  } else {
+    // heat: blue → orange → red
+    const c = new THREE.Color();
+    c.setHSL(0.66 - v * 0.66, 0.9, 0.55);
+    return c;
+  }
+}
+
+function updateInstanceColors() {
+  DISTRICTS.forEach((d) => {
+    const col = overlayColor(d.id, currentOverlay);
+    for (let i = 0; i < BUILDINGS_PER_BLOCK; i++) {
+      districtMeshes[d.id].setColorAt(i, col);
+    }
+    districtMeshes[d.id].instanceColor.needsUpdate = true;
+  });
+}
+
+// ============================================================
+// RAYCASTING — hover tooltip
+// ============================================================
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+const tooltipEl = document.getElementById("tooltip");
+let hoveredDistrict = -1;
+
+window.addEventListener("mousemove", (e) => {
+  mouse.x =  (e.clientX / window.innerWidth)  * 2 - 1;
+  mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+
+  let found = -1;
+  for (let i = 0; i < districtMeshes.length; i++) {
+    const hits = raycaster.intersectObject(districtMeshes[i]);
+    if (hits.length) { found = i; break; }
+  }
+
+  hoveredDistrict = found;
+  if (found >= 0) {
+    const s = state[found];
+    const d = DISTRICTS[found];
+    document.getElementById("ttName").textContent = d.name;
+    document.getElementById("ttTier").textContent = d.tier;
+    document.getElementById("ttEnergy").style.width = `${clamp(s.energy_load / 2 * 100, 0, 100)}%`;
+    document.getElementById("ttWater").style.width  = `${s.water_stress * 100}%`;
+    document.getElementById("ttUnrest").style.width = `${s.unrest * 100}%`;
+    document.getElementById("ttProd").style.width   = `${s.productivity * 100}%`;
+    tooltipEl.style.display = "block";
+    tooltipEl.style.left = `${e.clientX + 16}px`;
+    tooltipEl.style.top  = `${e.clientY - 10}px`;
+  } else {
+    tooltipEl.style.display = "none";
+  }
+});
+
+// ============================================================
+// LIVE SIM POLLING — pulls from sim_server.py /api/state
+// Maps Python faction data → city district states
+// ============================================================
+const FACTION_TO_DISTRICT = {
+  // faction name → district id(s) that represent it
+  "Senate District":   [0, 2, 7],
+  "Industrial Sector": [5],
+  "Commerce Ring":     [3, 6],
+  "Underworld":        [4],
+  "Military Zone":     [1],
+};
+
+let _simConnected = false;
+
+async function pollCityState() {
+  try {
+    const res = await fetch("/api/state", { cache: "no-store" });
+    if (!res.ok) throw new Error("no server");
+    const s = await res.json();
+
+    // Inject live data into district states
+    s.factions.forEach((f) => {
+      const dids = FACTION_TO_DISTRICT[f.name] ?? [];
+      dids.forEach((did) => {
+        if (!state[did]) return;
+        // Map Python metrics → city state fields
+        state[did].unrest       = 1.0 - f.strength;
+        state[did].productivity = f.strength;
+        // food_per_cap → proxy for water_stress (low food = high stress)
+        state[did].water_stress = Math.max(0, 1.0 - f.food_per_cap / 30.0);
+        state[did].energy_load  = state[did].energy_load * 0.9 + 0.1 * (1.0 - f.strength);
+      });
+    });
+
+    // Update cycle label with Python step
+    document.getElementById("cycleLabel").textContent =
+      `Python step ${s.step} | City cycle ${cycle.toLocaleString()}`;
+
+    if (!_simConnected) {
+      _simConnected = true;
+      // Add live badge to title
+      const h1 = document.querySelector("#topbar h1");
+      if (h1) h1.innerHTML += ' <span style="font-size:9px;color:#44ff88;letter-spacing:0">● LIVE</span>';
+    }
+
+    updateInstanceColors();
+    updateKPIs();
+  } catch (_) {
+    // server offline — JS simulation continues on its own
+  }
+  setTimeout(pollCityState, 2000);
+}
+pollCityState();
+
+// ============================================================
+// UI BINDINGS
+// ============================================================
+function setSlider(id, labelId, key) {
+  document.getElementById(id).addEventListener("input", (e) => {
+    policy[key] = parseFloat(e.target.value);
+    document.getElementById(labelId).textContent = parseFloat(e.target.value).toFixed(2);
+  });
+}
+setSlider("sEnergy", "lEnergy", "energy");
+setSlider("sWater",  "lWater",  "water");
+setSlider("sSec",    "lSec",    "security");
+setSlider("sCool",   "lCool",   "cooling");
+
+document.querySelectorAll(".scenario-btn[data-sc]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    scenario = btn.dataset.sc;
+    document.querySelectorAll(".scenario-btn[data-sc]").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    state = initState(scenario);
+    cycle = 0;
+  });
+});
+
+document.querySelectorAll(".overlay-btn[data-ov]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    currentOverlay = btn.dataset.ov;
+    document.querySelectorAll(".overlay-btn[data-ov]").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    updateInstanceColors();
+  });
+});
+
+document.getElementById("btnPause").addEventListener("click", () => {
+  paused = !paused;
+  document.getElementById("btnPause").textContent = paused ? "▶ Resume" : "⏸ Pause";
+});
+
+document.getElementById("btnReset").addEventListener("click", () => {
+  state = initState(scenario);
+  cycle = 0;
+});
+
+document.getElementById("sSpeed").addEventListener("input", (e) => {
+  document.getElementById("lSpeed").textContent = e.target.value;
+});
+
+// ============================================================
+// KPI UPDATES
+// ============================================================
+function updateKPIs() {
+  const avgTemp  = state.reduce((s, d) => s + d.temperature, 0) / state.length;
+  const avgProd  = state.reduce((s, d) => s + d.productivity, 0) / state.length;
+  const hiUnrest = state.filter((d) => d.unrest > 0.6).length;
+  const hiWater  = state.filter((d) => d.water_stress > 0.7).length;
+
+  document.getElementById("kTemp").textContent    = `${avgTemp.toFixed(0)}°`;
+  document.getElementById("kProd").textContent    = `${(avgProd * 100).toFixed(0)}%`;
+  document.getElementById("kUnrest").textContent  = `${hiUnrest}/${DISTRICTS.length}`;
+  document.getElementById("kWater").textContent   = `${hiWater}/${DISTRICTS.length}`;
+  document.getElementById("cycleLabel").textContent = `Cycle ${cycle.toLocaleString()}`;
+}
+
+// ============================================================
+// LABEL PROJECTION
+// ============================================================
+const _tmpVec = new THREE.Vector3();
+function updateLabels() {
+  DISTRICTS.forEach((d, i) => {
+    const wx = (d.col - GRID_W / 2 + 0.5) * BLOCK;
+    const wz = (d.row - GRID_H / 2 + 0.5) * BLOCK;
+    const wy = TIER_HEIGHT[d.tier] || 3.0;
+    _tmpVec.set(wx, wy + 2.5, wz);
+    _tmpVec.project(camera);
+    const x = (_tmpVec.x * 0.5 + 0.5) * window.innerWidth;
+    const y = (-_tmpVec.y * 0.5 + 0.5) * window.innerHeight;
+    labelEls[i].style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px)`;
+    labelEls[i].style.opacity   = _tmpVec.z < 1 ? "0.9" : "0";
+  });
+}
+
+// ============================================================
+// SIMULATION TICK TIMER
+// ============================================================
+let lastTick = 0;
+function maybeSimStep(now) {
+  if (paused) return;
+  const speed = parseInt(document.getElementById("sSpeed").value, 10);
+  const interval = 1000 / speed;
+  if (now - lastTick > interval) {
+    simStep();
+    updateInstanceColors();
+    updateKPIs();
+    lastTick = now;
+  }
+}
+
+// ============================================================
+// ANIMATE
+// ============================================================
+let lastT = 0;
+
+// Initial color pass
+updateInstanceColors();
+updateKPIs();
+
+function animate(t) {
+  const dt = (t - lastT) * 0.001;
+  lastT = t;
+
+  maybeSimStep(t);
+
+  // Speeder particles
+  for (const sp of laneParticles) {
+    sp.t += sp.speed * sp.dir;
+    if (sp.t > 1) sp.t = 0;
+    if (sp.t < 0) sp.t = 1;
+    sp.mesh.position.set(
+      sp.ax + (sp.bx - sp.ax) * sp.t,
+      sp.h,
+      sp.az + (sp.bz - sp.az) * sp.t
+    );
+    // color by unrest of source district
+    const si = laneParticles.indexOf(sp) % DISTRICTS.length;
+    const u = state[si].unrest;
+    sp.mesh.material.color.setHSL(0.12 - u * 0.12, 0.9, 0.65);
+  }
+
+  controls.update();
+  updateLabels();
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(animate);
+}
+requestAnimationFrame(animate);
+
+window.addEventListener("resize", () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>

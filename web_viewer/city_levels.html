@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Coruscant – Vertical Levels</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html,body { width:100%; height:100%; overflow:hidden; background:#000;
+  font-family:"Segoe UI",system-ui,sans-serif; color:#c8d8f0; }
+
+#topbar {
+  position:fixed; top:0; left:0; right:0; height:42px; z-index:30;
+  background:rgba(3,6,14,.97); border-bottom:1px solid rgba(40,70,130,.3);
+  display:flex; align-items:center; gap:12px; padding:0 14px;
+}
+#topbar h1 { font-size:12px; font-weight:700; letter-spacing:3px;
+  color:#ffd060; text-transform:uppercase; }
+.nav-btn { font-size:10px; color:#88aacc; text-decoration:none;
+  border:1px solid rgba(136,170,204,.25); padding:4px 10px; border-radius:5px;
+  background:rgba(136,170,204,.05); transition:background .2s; }
+.nav-btn:hover { background:rgba(136,170,204,.18); }
+#cycleLbl { margin-left:auto; font-size:10px; color:#445566; letter-spacing:1px; }
+
+/* ── LAYOUT ── */
+#layout { position:fixed; left:0; top:42px; right:0; bottom:0;
+  display:flex; }
+
+/* Left level tabs */
+#tabs { width:130px; flex-shrink:0; display:flex; flex-direction:column;
+  background:rgba(3,6,14,.95); border-right:1px solid rgba(40,70,130,.3); }
+.tab { flex:1; display:flex; flex-direction:column; justify-content:center;
+  padding:0 10px 0 12px; cursor:pointer; transition:background .2s;
+  border-bottom:1px solid rgba(30,50,90,.25); }
+.tab:hover,.tab.sel { background:rgba(255,255,255,.05); }
+.tab .tname { font-size:9px; font-weight:700; letter-spacing:.8px;
+  text-transform:uppercase; line-height:1.3; }
+.tab .tnum  { font-size:8.5px; opacity:.45; margin-top:3px; }
+
+/* Canvas */
+#cvs { flex:1; display:block; }
+
+/* Right sidebar */
+#sidebar { width:210px; flex-shrink:0;
+  background:rgba(3,6,14,.95); border-left:1px solid rgba(40,70,130,.3);
+  padding:12px; display:flex; flex-direction:column; gap:8px; overflow-y:auto; }
+#sidebar h2 { font-size:9px; letter-spacing:1.5px; font-weight:700;
+  text-transform:uppercase; color:#ffd060; }
+#selTitle { font-size:13px; font-weight:700; color:#fff; }
+#selDesc  { font-size:10px; color:#6688aa; line-height:1.55; }
+.kpi { margin-bottom:6px; }
+.kpi-name { font-size:8.5px; letter-spacing:.8px; text-transform:uppercase;
+  color:#6688aa; margin-bottom:3px; }
+.kpi-wrap { height:4px; background:rgba(255,255,255,.06); border-radius:2px; overflow:hidden; }
+.kpi-fill { height:100%; border-radius:2px; transition:width .8s; }
+.kpi-val  { font-size:10px; text-align:right; margin-top:2px; }
+hr { border:none; border-top:1px solid rgba(40,70,120,.25); }
+.pol-btn { padding:6px 10px; border-radius:6px; border:none; cursor:pointer;
+  text-transform:uppercase; font-size:9px; letter-spacing:.8px; font-weight:700;
+  background:rgba(20,35,60,.9); color:#7799bb;
+  border:1px solid rgba(60,100,180,.18); transition:all .2s; width:100%; text-align:left; }
+.pol-btn:hover { background:rgba(60,100,180,.18); color:#c8d8f0; }
+.pol-btn.on { background:rgba(255,200,60,.15); color:#ffd060; border-color:rgba(255,200,60,.4); }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <span style="font-size:16px">⬛</span>
+  <h1>Coruscant — Vertical Levels</h1>
+  <a href="./index.html" class="nav-btn">🌐 Globe</a>
+  <a href="./city.html"  class="nav-btn">🏙 City Grid</a>
+  <span id="cycleLbl">CYCLE 0</span>
+</div>
+
+<div id="layout">
+  <div id="tabs"></div>
+  <canvas id="cvs"></canvas>
+  <div id="sidebar">
+    <h2>Selected Level</h2>
+    <div id="selTitle">Senate District</div>
+    <div id="selDesc">Click a level band to inspect it.</div>
+    <hr>
+    <h2>Metrics</h2>
+    <div id="kpiList"></div>
+    <hr>
+    <h2>Policy</h2>
+    <button class="pol-btn" data-pol="power">⚡ Power Boost</button>
+    <button class="pol-btn" data-pol="water">💧 Water Ration</button>
+    <button class="pol-btn" data-pol="patrol">🛡 Security Patrol</button>
+    <button class="pol-btn" data-pol="vent">🌬 Ventilation</button>
+  </div>
+</div>
+
+<script>
+// ─── DATA ────────────────────────────────────────────────────────────
+const LEVELS = [
+  { id:'senate', name:'Senate District',  num:'LEVEL 1',
+    h1:'#ffe080', h2:'#ffd040', fog:'rgba(255,220,80,',  sky1:'#100c00', sky2:'#060400',
+    pop:.18, energy:.95, water:.98, crime:.02, air:.92,
+    desc:'The gleaming apex of Coruscant. Senate towers, embassies, and the Jedi Temple. Unlimited power, pristine air recyclers.',
+    pol:{}, base:null },
+  { id:'upper',  name:'Upper City',       num:'LEVELS 2–100',
+    h1:'#88ddff', h2:'#3399ee', fog:'rgba(80,180,255,',  sky1:'#00060f', sky2:'#000408',
+    pop:.55, energy:.80, water:.85, crime:.12, air:.75,
+    desc:'Luxury residences and corporate headquarters. Gleaming neon, orderly speeder lanes, bright climate systems.',
+    pol:{}, base:null },
+  { id:'mid',    name:'Mid Levels',       num:'LEVELS 101–999',
+    h1:'#ff9944', h2:'#cc5500', fog:'rgba(220,100,30,',  sky1:'#090400', sky2:'#050200',
+    pop:.82, energy:.55, water:.60, crime:.42, air:.45,
+    desc:'Industrial megablocks and cramped habitats. Black markets thrive. Ancient amber power conduits.',
+    pol:{}, base:null },
+  { id:'lower',  name:'Lower Levels',     num:'LEVELS 1000–1312',
+    h1:'#ff4433', h2:'#991100', fog:'rgba(200,40,20,',   sky1:'#070000', sky2:'#040000',
+    pop:.70, energy:.30, water:.28, crime:.72, air:.22,
+    desc:'Near-lawless territory. Pipe stacks and scavenger settlements. Republic forces rarely venture here.',
+    pol:{}, base:null },
+  { id:'under',  name:'Level 1313',       num:'LEVEL 1313',
+    h1:'#661111', h2:'#330000', fog:'rgba(120,10,10,',   sky1:'#040000', sky2:'#020000',
+    pop:.40, energy:.12, water:.10, crime:.96, air:.06,
+    desc:'Complete darkness. Criminal syndicates rule absolutely. The planet\'s raw bedrock meters below.',
+    pol:{}, base:null },
+];
+LEVELS.forEach((l,i) => l.base={pop:l.pop,energy:l.energy,water:l.water,crime:l.crime,air:l.air});
+const FRACS = [.19,.21,.22,.19,.19];
+const KPI = [
+  {key:'energy',label:'Energy',   col:'#ffd060'},
+  {key:'water', label:'Water',    col:'#44aaff'},
+  {key:'crime', label:'Crime',    col:'#ff4444', inv:true},
+  {key:'air',   label:'Air Qual.',col:'#44dd99'},
+  {key:'pop',   label:'Population',col:'#cc88ff'},
+];
+
+// ─── BUILDING GENERATOR ──────────────────────────────────────────────
+// Pre-generate building silhouettes so they don't change each frame
+function genBuildings(li, bandW, bandH, seed) {
+  const lv = LEVELS[li];
+  const blds = [];
+  // More buildings for dense levels
+  const counts = [28, 32, 38, 34, 26];
+  const n = counts[li];
+  const maxH = [.85, .75, .65, .55, .45][li];
+  const minH = [.20, .15, .10, .08, .06][li];
+
+  let rng = seed;
+  const rand = () => { rng = (rng * 1664525 + 1013904223) & 0xffffffff; return (rng >>> 0) / 4294967295; };
+
+  // Sort into foreground and background layers
+  for (let layer = 0; layer < 2; layer++) {
+    const layerN = layer === 0 ? Math.floor(n * 0.6) : n - Math.floor(n * 0.6);
+    const depthY = layer === 0 ? 0.1 : 0.35; // background starts higher up
+    const alpha  = layer === 0 ? 1.0 : 0.55;
+    const wFactor = layer === 0 ? 1.0 : 0.7;
+
+    for (let i = 0; i < layerN; i++) {
+      const x = rand() * bandW;
+      const h = (minH + rand() * (maxH - minH)) * bandH;
+      const w = (0.018 + rand() * 0.032) * bandW * wFactor;
+      const winRows = Math.max(2, Math.floor(h / bandH * 18));
+      const winCols = Math.max(1, Math.floor(w / 12));
+
+      // build window mask
+      const windows = [];
+      for (let wr = 0; wr < winRows; wr++)
+        for (let wc = 0; wc < winCols; wc++)
+          if (rand() > .38) windows.push({wr, wc, a: 0.3 + rand() * 0.6});
+
+      blds.push({ x, h, w, depthY, alpha, layer, windows, winRows, winCols,
+        antennae: rand() > 0.6 });
+    }
+  }
+  // background first
+  blds.sort((a,b) => a.layer - b.layer);
+  return blds;
+}
+
+// ─── CANVAS ─────────────────────────────────────────────────────────
+const cvs = document.getElementById('cvs');
+const ctx = cvs.getContext('2d');
+let selIdx = 0, cycle = 0;
+
+let bldCache = null; // [li] = {blds, W, bandH}
+
+function getSize() { return { W: cvs.clientWidth, H: cvs.clientHeight }; }
+
+function resize() {
+  cvs.width  = cvs.clientWidth;
+  cvs.height = cvs.clientHeight;
+  bldCache = null; // force rebuild
+}
+window.addEventListener('resize', resize);
+setTimeout(resize, 50);
+
+function ensureCache(W, H) {
+  if (bldCache && bldCache.W === W && bldCache.H === H) return;
+  bldCache = { W, H, levels: [] };
+  let y = 0;
+  for (let li = 0; li < LEVELS.length; li++) {
+    const bh = H * FRACS[li];
+    bldCache.levels.push({ y, h: bh, blds: genBuildings(li, W, bh, li * 999983 + 12345) });
+    y += bh;
+  }
+}
+
+// ─── SPEEDERS ───────────────────────────────────────────────────────
+const speeders = [];
+for (let li = 0; li < LEVELS.length; li++) {
+  for (let s = 0; s < 9 + li * 4; s++) {
+    const dir = Math.random() < .5 ? 1 : -1;
+    speeders.push({
+      li, fy: .12 + Math.random() * .72,
+      x: Math.random(), speed: (.0006 + Math.random() * .0018) * dir,
+      size: 1.5 + Math.random() * 2, dir,
+    });
+  }
+}
+
+// ─── LIFTS ──────────────────────────────────────────────────────────
+const lifts = [];
+for (let t = 0; t < 8; t++)
+  lifts.push({ fx: .04 + Math.random() * .92, fy: Math.random(),
+    speed: (.0005 + Math.random() * .0015) * (Math.random() < .5 ? 1 : -1) });
+
+// ─── DRAW ────────────────────────────────────────────────────────────
+function draw() {
+  const W = cvs.width, H = cvs.height;
+  if (!W || !H) return;
+  ensureCache(W, H);
+  ctx.clearRect(0, 0, W, H);
+
+  for (let li = 0; li < LEVELS.length; li++) {
+    const lv  = LEVELS[li];
+    const bnd = bldCache.levels[li];
+    const blds = bnd.blds;
+    const BY = bnd.y, BH = bnd.h; // band top Y, band height
+
+    // ── Sky gradient ──
+    const skyGrad = ctx.createLinearGradient(0, BY, 0, BY + BH);
+    skyGrad.addColorStop(0, lv.sky1);
+    skyGrad.addColorStop(1, lv.sky2);
+    ctx.fillStyle = skyGrad;
+    ctx.fillRect(0, BY, W, BH);
+
+    // ── Atmospheric haze from top ──
+    const hazeGrad = ctx.createLinearGradient(0, BY, 0, BY + BH * 0.45);
+    hazeGrad.addColorStop(0, lv.fog + '0.18)');
+    hazeGrad.addColorStop(1, lv.fog + '0.0)');
+    ctx.fillStyle = hazeGrad;
+    ctx.fillRect(0, BY, W, BH);
+
+    // ── Grid line texture ──
+    ctx.strokeStyle = lv.h2 + '18';
+    ctx.lineWidth = 0.5;
+    for (let gx = 0; gx < W; gx += 80) {
+      ctx.globalAlpha = .04 + .02 * li;
+      ctx.beginPath(); ctx.moveTo(gx, BY); ctx.lineTo(gx, BY + BH); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    // ── Buildings (background layer first) ──
+    const floorY = BY + BH;
+    for (const b of blds) {
+      const bx = b.x - b.w / 2;
+      const by = floorY - b.h - b.depthY * BH * 0.3;
+      const bh = b.h;
+      const bw = b.w;
+
+      ctx.globalAlpha = b.alpha;
+
+      // Body gradient
+      const bgrad = ctx.createLinearGradient(bx, by, bx + bw, by + bh);
+      const c1 = b.layer === 0 ? lv.h1 : lv.h2;
+      const c2 = lv.h2;
+      bgrad.addColorStop(0, hexMul(c1, .22));
+      bgrad.addColorStop(.5, hexMul(c2, .12));
+      bgrad.addColorStop(1, hexMul(c2, .06));
+      ctx.fillStyle = bgrad;
+      ctx.fillRect(bx, by, bw, bh);
+
+      // Left edge highlight
+      ctx.fillStyle = lv.h1 + 'cc';
+      ctx.globalAlpha = b.alpha * 0.25;
+      ctx.fillRect(bx, by, 1.5, bh);
+
+      // Top edge glow
+      const topGrad = ctx.createLinearGradient(bx, by, bx, by + 8);
+      topGrad.addColorStop(0, lv.h1 + 'ee');
+      topGrad.addColorStop(1, lv.h1 + '00');
+      ctx.globalAlpha = b.alpha * 0.6;
+      ctx.fillStyle = topGrad;
+      ctx.fillRect(bx - 2, by - 3, bw + 4, 10);
+
+      // Windows
+      ctx.globalAlpha = b.alpha;
+      const winH = Math.max(1.5, bh / (b.winRows * 2));
+      const winW = Math.max(1.5, bw / (b.winCols * 2.2));
+      for (const w of b.windows) {
+        const wx = bx + bw * (.12 + w.wc / b.winCols * .76);
+        const wy = by + bh * (.06 + w.wr / b.winRows * .88);
+        ctx.globalAlpha = b.alpha * w.a * (0.4 + LEVELS[li].energy * 0.6);
+        ctx.fillStyle = lv.h1;
+        ctx.fillRect(wx, wy, winW, winH);
+      }
+
+      // Antennae
+      if (b.antennae) {
+        ctx.globalAlpha = b.alpha * 0.7;
+        ctx.strokeStyle = lv.h1;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(bx + bw * .5, by);
+        ctx.lineTo(bx + bw * .5, by - BH * .06);
+        ctx.stroke();
+        // Blinking tip
+        ctx.globalAlpha = b.alpha * (Math.sin(Date.now() * .002 + b.x) > 0 ? 0.9 : 0.2);
+        ctx.fillStyle = lv.h1;
+        ctx.beginPath(); ctx.arc(bx + bw*.5, by - BH*.06, 1.5, 0, Math.PI*2); ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 1;
+
+    // ── Ground glow ──
+    const groundGrad = ctx.createLinearGradient(0, floorY - BH * .08, 0, floorY);
+    groundGrad.addColorStop(0, lv.fog + '0.0)');
+    groundGrad.addColorStop(1, lv.fog + '0.35)');
+    ctx.fillStyle = groundGrad;
+    ctx.fillRect(0, floorY - BH * .08, W, BH * .08);
+
+    // Ground line
+    const lineGrad = ctx.createLinearGradient(0, 0, W, 0);
+    lineGrad.addColorStop(0,   lv.fog + '0.0)');
+    lineGrad.addColorStop(.15, lv.fog + '0.8)');
+    lineGrad.addColorStop(.85, lv.fog + '0.8)');
+    lineGrad.addColorStop(1,   lv.fog + '0.0)');
+    ctx.strokeStyle = lineGrad;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(0, floorY); ctx.lineTo(W, floorY); ctx.stroke();
+
+    // ── Horizontal speeder lanes (subtle lines) ──
+    for (let lane = 0; lane < 3; lane++) {
+      const ly2 = BY + BH * (.25 + lane * .25);
+      ctx.strokeStyle = lv.fog + '0.06)';
+      ctx.lineWidth = .5;
+      ctx.setLineDash([40, 60]); ctx.lineDashOffset = Date.now() * .05 * (lane%2===0?1:-1);
+      ctx.beginPath(); ctx.moveTo(0, ly2); ctx.lineTo(W, ly2); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // ── Selection overlay ──
+    if (li === selIdx) {
+      ctx.strokeStyle = lv.h1;
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = 0.55;
+      ctx.strokeRect(2, BY + 2, W - 4, BH - 4);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // ── Speeders ────────────────────────────────────────────────────────
+  for (const sp of speeders) {
+    const bnd = bldCache.levels[sp.li];
+    const lv  = LEVELS[sp.li];
+    const sx  = sp.x * W;
+    const sy  = bnd.y + sp.fy * bnd.h;
+    const trailLen = sp.size * (5 + sp.speed * 500);
+    const tx = sx - sp.dir * trailLen;
+
+    const grd = ctx.createLinearGradient(tx, sy, sx, sy);
+    grd.addColorStop(0, lv.fog + '0.0)');
+    grd.addColorStop(1, lv.fog + '1.0)');
+    ctx.fillStyle = grd;
+    ctx.globalAlpha = 0.75;
+    ctx.beginPath();
+    ctx.ellipse(sx - sp.dir * trailLen/2, sy, Math.abs(trailLen)/2, sp.size * .5, 0, 0, Math.PI*2);
+    ctx.fill();
+    // Bright core
+    ctx.fillStyle = '#fff';
+    ctx.globalAlpha = 0.85;
+    ctx.beginPath(); ctx.arc(sx, sy, sp.size * .4, 0, Math.PI*2); ctx.fill();
+    ctx.globalAlpha = 1;
+
+    sp.x += sp.speed;
+    if (sp.x > 1.04) sp.x = -.04;
+    if (sp.x < -.04) sp.x =  1.04;
+  }
+
+  // ── Turbolifts ──────────────────────────────────────────────────────
+  for (const lf of lifts) {
+    const sx = lf.fx * W;
+    const sy = lf.fy * cvs.height;
+    const trail = lf.speed > 0 ? -14 : 14;
+    const grd = ctx.createLinearGradient(sx, sy + trail, sx, sy);
+    grd.addColorStop(0, 'rgba(200,220,255,0)');
+    grd.addColorStop(1, 'rgba(200,220,255,0.8)');
+    ctx.fillStyle = grd;
+    ctx.globalAlpha = 0.5;
+    ctx.fillRect(sx - 1.5, Math.min(sy, sy + trail), 3, Math.abs(trail));
+    ctx.fillStyle = 'rgba(220,240,255,0.9)';
+    ctx.globalAlpha = 0.7;
+    ctx.fillRect(sx - 2.5, sy - 4, 5, 8);
+    ctx.globalAlpha = 1;
+
+    lf.fy += lf.speed;
+    if (lf.fy > 1.02) lf.fy = -.02;
+    if (lf.fy < -.02) lf.fy =  1.02;
+  }
+
+  // ── Level labels on canvas ────────────────────────────────────────
+  for (let li = 0; li < LEVELS.length; li++) {
+    const lv  = LEVELS[li];
+    const bnd = bldCache.levels[li];
+    ctx.font = 'bold 10px "Segoe UI"';
+    ctx.fillStyle = lv.h1;
+    ctx.globalAlpha = li === selIdx ? 0.7 : 0.3;
+    ctx.fillText(lv.name.toUpperCase(), 12, bnd.y + 18);
+    ctx.globalAlpha = 1;
+  }
+}
+
+// Utility: multiply hex color by factor → hex string
+function hexMul(hex, f) {
+  const r = Math.min(255, parseInt(hex.slice(1,3),16) * f | 0);
+  const g = Math.min(255, parseInt(hex.slice(3,5),16) * f | 0);
+  const b = Math.min(255, parseInt(hex.slice(5,7),16) * f | 0);
+  return `rgb(${r},${g},${b})`;
+}
+
+// ─── TABS ────────────────────────────────────────────────────────────
+function buildTabs() {
+  const el = document.getElementById('tabs');
+  el.innerHTML = '';
+  for (let i = 0; i < LEVELS.length; i++) {
+    const lv = LEVELS[i];
+    const div = document.createElement('div');
+    div.className = 'tab' + (i === selIdx ? ' sel' : '');
+    div.innerHTML = `<span class="tname" style="color:${lv.h1}">${lv.name}</span><span class="tnum">${lv.num}</span>`;
+    div.style.borderLeftColor = lv.h1;
+    if (i === selIdx) div.style.borderLeft = `3px solid ${lv.h1}`;
+    div.addEventListener('click', () => { selIdx = i; buildTabs(); updateSidebar(); });
+    el.appendChild(div);
+  }
+}
+
+// ─── SIDEBAR ─────────────────────────────────────────────────────────
+function updateSidebar() {
+  const lv = LEVELS[selIdx];
+  document.getElementById('selTitle').textContent = lv.name;
+  document.getElementById('selTitle').style.color = lv.h1;
+  document.getElementById('selDesc').textContent  = lv.desc;
+  const kl = document.getElementById('kpiList');
+  kl.innerHTML = '';
+  for (const k of KPI) {
+    let v = lv[k.key]; if (k.inv) v = 1 - v;
+    const pct = (v * 100).toFixed(0);
+    kl.innerHTML += `<div class="kpi">
+      <div class="kpi-name">${k.label}</div>
+      <div class="kpi-wrap"><div class="kpi-fill" style="width:${pct}%;background:${k.col}"></div></div>
+      <div class="kpi-val" style="color:${k.col}">${pct}%</div>
+    </div>`;
+  }
+  document.querySelectorAll('.pol-btn').forEach(btn =>
+    btn.classList.toggle('on', !!lv.pol[btn.dataset.pol]));
+}
+
+document.querySelectorAll('.pol-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const lv = LEVELS[selIdx], pol = btn.dataset.pol;
+    lv.pol[pol] = !lv.pol[pol];
+    btn.classList.toggle('on', lv.pol[pol]);
+    const b = lv.base;
+    lv.pop    = clamp(b.pop    + (lv.pol.vent   ? .05 : 0));
+    lv.energy = clamp(b.energy + (lv.pol.power  ? .18 : 0));
+    lv.water  = clamp(b.water  + (lv.pol.water  ? .14 : 0));
+    lv.crime  = clamp(b.crime  - (lv.pol.patrol ? .22 : 0), 0, 1);
+    lv.air    = clamp(b.air    + (lv.pol.vent   ? .20 : 0));
+    updateSidebar();
+  });
+});
+
+function clamp(v, lo=0, hi=1) { return Math.max(lo, Math.min(hi, v)); }
+
+// ─── CANVAS CLICK ─────────────────────────────────────────────────────
+cvs.addEventListener('click', e => {
+  const H = cvs.height;
+  let y = e.offsetY, acc = 0;
+  for (let i = 0; i < LEVELS.length; i++) {
+    acc += H * FRACS[i];
+    if (y < acc) { selIdx = i; buildTabs(); updateSidebar(); break; }
+  }
+});
+
+// ─── SIMULATION ──────────────────────────────────────────────────────
+let lastTick = 0, tick = 0;
+function simTick(t) {
+  if (t - lastTick < 1500) return;
+  lastTick = t; tick++;
+  document.getElementById('cycleLbl').textContent = 'CYCLE ' + tick;
+  for (const lv of LEVELS) {
+    lv.energy = clamp(lv.energy + (Math.random()-.502)*.008);
+    lv.water  = clamp(lv.water  + (Math.random()-.502)*.006);
+    lv.crime  = clamp(lv.crime  + (Math.random()-.498)*.006, 0, 1);
+    lv.air    = clamp(lv.air    + (Math.random()-.502)*.005);
+  }
+  updateSidebar();
+}
+
+// ─── MAIN LOOP ────────────────────────────────────────────────────────
+function loop(t) {
+  requestAnimationFrame(loop);
+  simTick(t);
+  draw();
+}
+
+buildTabs();
+updateSidebar();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

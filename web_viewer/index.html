@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Coruscant Realtime Viewer</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <div id="hud">
+      <div class="title">Coruscant Realtime Viewer</div>
+      <div class="subtitle">NASA-style orbital scene driven by CoruscantSim fields</div>
+      <div id="status">Booting renderer...</div>
+      <div id="progress"><span id="progressFill"></span></div>
+      <div id="metrics">Loading metrics...</div>
+      <div class="hint">Mouse: rotate/zoom | Click planet: zoom to city | Keys: O orbits, L labels | <a href="./city.html" style="color:#ffd060;text-decoration:none">🏙 City Grid →</a> | <a href="./city_levels.html" style="color:#ff9944;text-decoration:none">⬛ Vertical Levels →</a></div>
+    </div>
+    <canvas id="scene"></canvas>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.164.1/build/three.module.js",
+          "three/examples/jsm/": "https://unpkg.com/three@0.164.1/examples/jsm/"
+        }
+      }
+    </script>
+    <script type="module" src="./src/main.js?v=20260421d"></script>
+  </body>
+</html>
