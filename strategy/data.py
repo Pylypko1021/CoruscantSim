@@ -1,0 +1,188 @@
+"""Static game data: buildings, units, technologies, factions.
+
+All balance constants live here so the autoresearch tuner can mutate them
+in one place (see strategy/balance_tune.py).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Dict, List, Tuple
+
+
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
+
+RESOURCES = ("materials", "food", "energy")  # region-local stockpiles
+# credits and science are faction-level
+
+
+# ---------------------------------------------------------------------------
+# Buildings
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class BuildingType:
+    key: str
+    name: str
+    cost_materials: float
+    cost_credits: float
+    build_ticks: int
+    upkeep_energy: float
+    upkeep_credits: float
+    # production per tick (scaled by modifiers in engine)
+    materials: float = 0.0
+    food: float = 0.0
+    energy: float = 0.0
+    science: float = 0.0
+    prod_points: float = 0.0      # unit production capacity
+    defense: float = 0.0          # adds to defender power
+    trade: float = 0.0            # trade capacity
+    tech_required: Tuple[str, int] = ("", 0)   # (branch, tier)
+
+
+BUILDINGS: Dict[str, BuildingType] = {
+    b.key: b for b in [
+        BuildingType("mine",      "Deep Core Mine",     60,  80, 6, 2.0, 1.0, materials=4.0),
+        BuildingType("farm",      "Agri-Tower",         40,  60, 4, 1.5, 1.0, food=6.0),
+        BuildingType("reactor",   "Fusion Reactor",     80, 120, 8, 0.0, 2.0, energy=10.0),
+        BuildingType("factory",   "War Factory",       100, 150, 8, 3.0, 2.0, prod_points=5.0),
+        BuildingType("lab",       "Research Spire",     90, 140, 8, 2.5, 2.0, science=3.0),
+        BuildingType("defense",   "Defense Grid",       70, 100, 6, 2.0, 1.5, defense=30.0,
+                     tech_required=("military", 1)),
+        BuildingType("spaceport", "Orbital Spaceport", 120, 200, 10, 3.0, 2.0, trade=10.0,
+                     tech_required=("economy", 1)),
+        BuildingType("citadel",   "Planetary Citadel", 200, 300, 14, 4.0, 3.0, defense=80.0, prod_points=3.0,
+                     tech_required=("military", 3)),
+    ]
+}
+
+
+# ---------------------------------------------------------------------------
+# Units
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class UnitType:
+    key: str
+    name: str
+    attack: float
+    defense: float
+    move_ticks: int               # ticks to traverse one region link
+    cost_materials: float
+    cost_credits: float
+    prod_points: float            # factory points to produce one squad
+    upkeep_food: float
+    upkeep_credits: float
+    tech_required: Tuple[str, int] = ("", 0)
+
+
+UNITS: Dict[str, UnitType] = {
+    u.key: u for u in [
+        UnitType("infantry", "Clone Infantry Corps", 1.0, 1.6, 3, 10,  20,  20, 0.6, 0.4),
+        UnitType("armor",    "Juggernaut Armor",     3.0, 2.0, 2, 40,  60,  60, 0.8, 1.0,
+                 tech_required=("military", 1)),
+        UnitType("aircraft", "Strike Wing",          4.5, 1.2, 1, 60, 100,  90, 0.4, 1.6,
+                 tech_required=("military", 2)),
+        UnitType("fleet",    "Orbital Fleet",        7.0, 4.0, 1, 120, 200, 150, 0.5, 2.5,
+                 tech_required=("military", 4)),
+    ]
+}
+
+
+# ---------------------------------------------------------------------------
+# Technology tree: 4 branches x 6 tiers
+# ---------------------------------------------------------------------------
+
+TECH_BRANCHES = ("military", "economy", "science", "infrastructure")
+
+# science cost to reach tier i (cumulative thresholds handled by engine)
+TECH_COST_BASE = 120.0
+TECH_COST_GROWTH = 1.8
+
+TECH_NAMES: Dict[str, List[str]] = {
+    "military": ["Blaster Doctrine", "Armored Columns", "Air Superiority",
+                 "Shield Arrays", "Orbital Command", "Planetary Sieges"],
+    "economy": ["Trade Charters", "Hyperlane Routes", "Galactic Banking",
+                "Mass Replication", "Tibanna Refining", "Core World Markets"],
+    "science": ["Data Archives", "Droid Researchers", "Holonet Labs",
+                "Kyber Studies", "Deep Simulations", "Singularity Engineering"],
+    "infrastructure": ["Mag-Lev Grids", "Vertical Farms", "Arcology Shells",
+                       "Auto-Repair Swarms", "Climate Domes", "World Engines"],
+}
+
+# Multipliers applied per tier reached
+MIL_ATTACK_PER_TIER = 0.12
+MIL_DEFENSE_PER_TIER = 0.12
+ECO_INCOME_PER_TIER = 0.15
+ECO_TRADE_PER_TIER = 0.20
+SCI_RATE_PER_TIER = 0.18
+INFRA_PROD_PER_TIER = 0.10
+INFRA_SLOTS_TIERS = (2, 4)        # tiers granting +1 building slot
+
+
+# ---------------------------------------------------------------------------
+# Factions
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class FactionDef:
+    fid: int
+    name: str
+    colour: str                    # hex for the viewer
+    aggression: float              # 0..1 — war appetite
+    greed: float                   # 0..1 — economy focus
+    curiosity: float               # 0..1 — science focus
+    seed_lat: float
+    seed_lon: float
+
+
+FACTIONS: List[FactionDef] = [
+    FactionDef(0, "Senate Coalition",  "#3473d9", 0.15, 0.55, 0.75,  10.0,   0.0),
+    FactionDef(1, "Industrial Combine","#d93434", 0.45, 0.80, 0.40, -20.0,  90.0),
+    FactionDef(2, "Commerce Ring",     "#34bf4f", 0.25, 0.95, 0.50,  30.0, 180.0),
+    FactionDef(3, "Underworld Cartel", "#cc9918", 0.75, 0.45, 0.25, -50.0, 270.0),
+    FactionDef(4, "Military Junta",    "#8c1ac0", 0.65, 0.35, 0.45,  60.0, 135.0),
+]
+
+
+# ---------------------------------------------------------------------------
+# Tunable balance block (mutated by balance_tune.py)
+# ---------------------------------------------------------------------------
+
+BALANCE = {
+    # economy
+    "tax_per_pop": 0.10,            # credits per million pop per tick
+    "food_per_pop": 0.08,           # food consumed per million pop per tick
+    "base_food_per_fertility": 2.5,  # subsistence hydroponics per region
+    "base_energy_per_potential": 2.0,
+    "base_materials_per_richness": 0.8,
+    "pop_soft_cap": 200.0,          # millions, scaled by infrastructure
+    "pop_growth_rate": 0.0025,      # per tick when fed and calm
+    "starvation_rate": 0.012,       # pop loss per tick when starving
+    "market_price_materials": 0.8,  # credits per surplus material auto-sold
+    "trade_income_per_route": 6.0,  # credits per tick per active trade route
+
+    # combat
+    "combat_intensity": 0.16,       # casualty fraction scale per tick
+    "defender_home_bonus": 1.25,
+    "entrench_per_tick": 0.02,      # garrison entrenchment growth, cap 0.3
+    "rout_ratio": 0.38,             # power ratio below which side retreats
+    "capture_devastation": 0.30,
+    "neutral_militia_base": 25.0,
+
+    # diplomacy
+    "war_relation_threshold": -45.0,
+    "war_advantage_required": 1.25,
+    "weariness_per_tick": 0.18,
+    "weariness_losing_mult": 2.2,
+    "peace_weariness": 62.0,
+    "border_friction": 0.18,
+    "trade_warmth": 0.08,
+
+    # ai
+    "garrison_fraction": 0.35,      # share of military kept home
+    "expansion_army_power": 25.0,   # min power before claiming neutrals
+    "doctrine_inertia": 25,         # ticks before doctrine can flip
+}

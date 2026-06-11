@@ -1,4 +1,52 @@
-# CoruscantSim MVP
+# CoruscantSim
+
+## 🎮 Autonomous RTS (нове, рекомендований вхід)
+
+Zero-player гранд-стратегія: 5 фракцій самостійно розвиваються, будують,
+досліджують технології, торгують, укладають союзи і воюють на глобусі з 288
+регіонів. Фізичне ядро планети живить клімат і катастрофи. Ви — спостерігач.
+
+```bash
+pip install -r requirements.txt
+
+# живий сервер + 3D-в'ювер (Three.js)
+python rts_server.py --port 8780 --speed 5
+# відкрийте http://localhost:8780
+
+# headless прогін без рендера + звіт
+python -m strategy.headless --ticks 3000 --no-physics
+
+# регресійні тести RTS-шару (очікуваний фінал: strategy_tests_ok)
+python tests_strategy.py
+
+# автотюнінг балансу (autoresearch-патерн)
+python -m strategy.balance_tune --iters 15 --ticks 1200
+```
+
+Структура RTS-шару:
+
+| Модуль | Відповідальність |
+|---|---|
+| `strategy/world.py` | 288 регіонів, родовища, клімат, граф сусідства, BFS-шляхи |
+| `strategy/data.py` | будівлі, юніти, дерево технологій, фракції, баланс-константи |
+| `strategy/state.py` | runtime-стан фракцій, армії (split/merge/втрати) |
+| `strategy/engine.py` | головний цикл: економіка→будівництво→AI→рух→бої→дипломатія |
+| `strategy/ai.py` | дворівневий AI: доктрини + build orders/армійські накази |
+| `strategy/combat.py` | бої на виснаження, облоги, захоплення, розгроми |
+| `strategy/diplomacy.py` | відносини, війни, втома від війни, мир, союзи, репарації |
+| `strategy/headless.py` | швидкий прогін + звіт |
+| `strategy/balance_tune.py` | автоматичний пошук параметрів балансу |
+| `rts_server.py` | HTTP API + статика (`/api/state`, `/api/region`, `/api/speed`, `/api/save`, `/api/reset`) |
+| `web_viewer/rts.html` + `src/rts.js` | 3D-глобус, армії, спалахи битв, торгові дуги, графіки, стрічка подій |
+
+Сервер у браузері: пауза/швидкість 1×–25×, клік по регіону — деталі,
+💾 Save → `rts_save.json` (відновлення: `StrategyEngine.load`).
+
+> Примітка для Windows: команди нижче в історичних розділах містять
+> macOS-шляхи зразка `/Users/cyberdid/...` — замінюйте на `python <script>`
+> у корені репозиторію.
+
+---
 
 ## Realistic Planet Visualization (Fast Start)
 

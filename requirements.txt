@@ -1,0 +1,4 @@
+# CoruscantSim — core simulation + autonomous RTS layer
+numpy>=1.26
+matplotlib>=3.8     # legacy dashboards / planet renderer only
+# imageio>=2.34     # optional: GIF export in render_coruscant_planet.py

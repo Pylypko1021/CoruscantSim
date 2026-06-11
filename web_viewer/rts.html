@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Coruscant — Autonomous RTS</title>
+    <style>
+      :root {
+        --bg: #07070e;
+        --panel: rgba(14, 16, 30, 0.88);
+        --border: #232645;
+        --fg: #c9cde8;
+        --dim: #7a7fa8;
+        --accent: #ffd060;
+      }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        background: var(--bg); color: var(--fg);
+        font-family: "Segoe UI", system-ui, sans-serif;
+        overflow: hidden; height: 100vh;
+      }
+      #scene { position: fixed; inset: 0; display: block; }
+      .panel {
+        position: fixed; background: var(--panel);
+        border: 1px solid var(--border); border-radius: 10px;
+        padding: 10px 12px; backdrop-filter: blur(6px);
+        font-size: 12px; z-index: 5;
+      }
+      #topbar {
+        top: 10px; left: 50%; transform: translateX(-50%);
+        display: flex; gap: 14px; align-items: center; white-space: nowrap;
+      }
+      #topbar .title { color: var(--accent); font-weight: 600; letter-spacing: 0.06em; }
+      #topbar button {
+        background: #1a1d36; color: var(--fg); border: 1px solid var(--border);
+        border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 12px;
+      }
+      #topbar button:hover { border-color: var(--accent); color: var(--accent); }
+      #topbar button.active { background: var(--accent); color: #14142a; font-weight: 600; }
+      #factions { top: 10px; left: 10px; width: 295px; max-height: 60vh; overflow-y: auto; }
+      #factions h3, #events h3, #detail h3 { font-size: 11px; color: var(--dim); letter-spacing: 0.12em; margin-bottom: 8px; }
+      .fac { border-left: 3px solid #888; padding: 5px 8px; margin-bottom: 6px; background: rgba(255,255,255,0.025); border-radius: 0 6px 6px 0; }
+      .fac .name { font-weight: 600; font-size: 12.5px; }
+      .fac .row { display: flex; justify-content: space-between; color: var(--dim); font-size: 11px; margin-top: 2px; }
+      .fac .row b { color: var(--fg); font-weight: 500; }
+      .fac.dead { opacity: 0.35; text-decoration: line-through; }
+      .war-tag { color: #ff6666; font-size: 10px; }
+      .ally-tag { color: #66ff99; font-size: 10px; }
+      #events { top: 10px; right: 10px; width: 330px; max-height: 46vh; overflow-y: auto; }
+      .ev { padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 11px; line-height: 1.35; }
+      .ev .t { color: var(--dim); margin-right: 5px; font-size: 10px; }
+      .ev.war .txt { color: #ff7777; }
+      .ev.peace .txt { color: #77dd99; }
+      .ev.capture .txt { color: #ffaa55; }
+      .ev.tech .txt { color: #7fb8ff; }
+      .ev.elimination .txt { color: #ff4444; font-weight: 700; }
+      .ev.alliance .txt { color: #66ffcc; }
+      #charts { bottom: 10px; left: 10px; width: 295px; }
+      #charts canvas { width: 100%; height: 90px; display: block; margin-bottom: 6px; background: rgba(0,0,0,0.25); border-radius: 6px; }
+      #charts .lbl { font-size: 10px; color: var(--dim); margin-bottom: 2px; }
+      #detail { bottom: 10px; right: 10px; width: 330px; max-height: 44vh; overflow-y: auto; display: none; }
+      #detail table { width: 100%; font-size: 11px; border-collapse: collapse; }
+      #detail td { padding: 2px 4px; }
+      #detail td:first-child { color: var(--dim); }
+      #legendHint { bottom: 12px; left: 50%; transform: translateX(-50%); color: var(--dim); font-size: 11px; }
+      ::-webkit-scrollbar { width: 6px; }
+      ::-webkit-scrollbar-thumb { background: #2a2e52; border-radius: 3px; }
+    </style>
+  </head>
+  <body>
+    <canvas id="scene"></canvas>
+
+    <div id="topbar" class="panel">
+      <span class="title">CORUSCANT // AUTONOMOUS RTS</span>
+      <span id="tick">tick 0</span>
+      <span>
+        <button data-speed="0">⏸</button>
+        <button data-speed="1">1×</button>
+        <button data-speed="2" class="active">2×</button>
+        <button data-speed="8">8×</button>
+        <button data-speed="25">25×</button>
+      </span>
+      <button id="saveBtn">💾 Save</button>
+      <button id="resetBtn">↺ Reset</button>
+    </div>
+
+    <div id="factions" class="panel"><h3>FACTIONS</h3><div id="facList"></div></div>
+    <div id="events" class="panel"><h3>EVENT FEED</h3><div id="evList"></div></div>
+    <div id="charts" class="panel">
+      <div class="lbl">REGIONS CONTROLLED</div><canvas id="chartRegions" width="271" height="90"></canvas>
+      <div class="lbl">MILITARY POWER</div><canvas id="chartPower" width="271" height="90"></canvas>
+    </div>
+    <div id="detail" class="panel"><h3 id="detailTitle">REGION</h3><div id="detailBody"></div></div>
+    <div id="legendHint" class="panel">Drag: rotate · Wheel: zoom · Click region: details · Cones = armies · Red flashes = battles · Green arcs = trade</div>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.164.1/build/three.module.js",
+          "three/examples/jsm/": "https://unpkg.com/three@0.164.1/examples/jsm/"
+        }
+      }
+    </script>
+    <script type="module" src="./src/rts.js?v=1"></script>
+  </body>
+</html>

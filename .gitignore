@@ -22,3 +22,9 @@ web_viewer/data/*.jpeg
 web_viewer/data/*.png
 web_viewer/data/*.npz
 web_viewer/data/sim_state.json
+
+# RTS runtime artifacts
+rts_save.json
+output_headless_*.json
+strategy/balance_results.tsv
+chronicle.md
