@@ -43,7 +43,7 @@ class Region:
     buildings: Dict[str, int] = field(default_factory=dict)
     construction: List[Dict] = field(default_factory=list)   # {key, ticks_left}
     stock: Dict[str, float] = field(default_factory=lambda: {
-        "materials": 40.0, "food": 40.0, "energy": 0.0,
+        "materials": 40.0, "food": 80.0, "energy": 0.0,
     })
 
     def slots(self, infra_bonus: int = 0) -> int:

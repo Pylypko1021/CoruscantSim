@@ -153,7 +153,8 @@ def _capture(engine: "StrategyEngine", region: Region, new_owner: int) -> str:
     region.owner = new_owner
     region.militia = 0.0
     region.entrenchment = 0.0
-    region.unrest = min(1.0, region.unrest + 0.35)
+    # conquest breeds resentment; peaceful-ish annexation of neutrals much less
+    region.unrest = min(1.0, region.unrest + (0.35 if old_owner >= 0 else 0.12))
     region.devastation = min(1.0, region.devastation + BALANCE["capture_devastation"])
     region.population = max(1.0, region.population * 0.93)
 
@@ -173,6 +174,7 @@ def _capture(engine: "StrategyEngine", region: Region, new_owner: int) -> str:
                    f"{engine.factions[new_owner].name} captured region {region.rid} "
                    f"from {engine.factions[old_owner].name}",
                    fid=new_owner, region=region.rid)
+        engine.handle_capital_loss(old_owner, region.rid)
         engine.check_faction_elimination(old_owner)
     else:
         engine.log("expand",

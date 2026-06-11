@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -70,6 +71,20 @@ const globe = new THREE.Mesh(
   new THREE.MeshStandardMaterial({ map: mapTexture, roughness: 0.85, metalness: 0.1 }),
 );
 scene.add(globe);
+
+// night-side city lights from the legacy texture set (optional, best effort)
+new THREE.TextureLoader().load(
+  "/data/coruscant_lights_metropolis.jpg",
+  (tex) => {
+    tex.colorSpace = THREE.SRGBColorSpace;
+    globe.material.emissiveMap = tex;
+    globe.material.emissive = new THREE.Color(0xffc878);
+    globe.material.emissiveIntensity = 0.22;
+    globe.material.needsUpdate = true;
+  },
+  undefined,
+  () => { /* texture not present — fine */ },
+);
 
 // faint atmosphere shell
 scene.add(new THREE.Mesh(
@@ -150,30 +165,111 @@ function paintRegions(state) {
 
 const armyGroup = new THREE.Group();
 scene.add(armyGroup);
-const armyMeshes = new Map();      // aid -> {group, target}
+const armyMeshes = new Map();      // aid -> {group, target, from, t, ...}
 
-function makeArmyModel(colourHex, power) {
+// Optional GLB models: drop files into web_viewer/models/{infantry,armor,aircraft,fleet}.glb
+// and they replace the procedural meshes automatically.
+const gltfLoader = new GLTFLoader();
+const glbScenes = {};              // kind -> THREE.Group
+for (const kind of ["infantry", "armor", "aircraft", "fleet"]) {
+  gltfLoader.load(`/models/${kind}.glb`,
+    (g) => { glbScenes[kind] = g.scene; },
+    undefined, () => { /* no model file — procedural fallback */ });
+}
+
+function dominantUnit(comp) {
+  const ATK = { infantry: 1.0, armor: 3.0, aircraft: 4.5, fleet: 7.0 };
+  let best = "infantry", bestScore = -1;
+  for (const [k, n] of Object.entries(comp || {})) {
+    const score = (ATK[k] || 1) * n;
+    if (score > bestScore) { bestScore = score; best = k; }
+  }
+  return best;
+}
+
+function makeArmyModel(colourHex, power, kind = "infantry") {
   const colour = new THREE.Color(colourHex);
+  const s = Math.min(0.016 + Math.sqrt(Math.max(power, 1)) * 0.0035, 0.06);
+
+  if (glbScenes[kind]) {
+    const model = glbScenes[kind].clone(true);
+    const box = new THREE.Box3().setFromObject(model);
+    const size = box.getSize(new THREE.Vector3()).length() || 1;
+    model.scale.setScalar((s * 3.2) / size);
+    model.traverse((o) => {
+      if (o.isMesh && o.material) {
+        o.material = o.material.clone();
+        if (o.material.color) o.material.color.lerp(colour, 0.45);
+      }
+    });
+    return model;
+  }
+
   const mat = new THREE.MeshStandardMaterial({ color: colour, roughness: 0.5, metalness: 0.35 });
   const dark = new THREE.MeshStandardMaterial({ color: colour.clone().multiplyScalar(0.55), roughness: 0.6 });
+  const glowMat = new THREE.MeshBasicMaterial({ color: 0xffeeaa });
   const g = new THREE.Group();
-  const s = Math.min(0.016 + Math.sqrt(Math.max(power, 1)) * 0.0035, 0.06);
-  // hull
-  const hull = new THREE.Mesh(new THREE.ConeGeometry(s * 0.7, s * 2.2, 6), mat);
-  hull.rotation.x = Math.PI / 2;
-  g.add(hull);
-  // wings
-  const wing = new THREE.Mesh(new THREE.BoxGeometry(s * 2.0, s * 0.18, s * 0.6), dark);
-  wing.position.z = -s * 0.3;
-  g.add(wing);
-  // engine glow
-  const glow = new THREE.Mesh(
-    new THREE.SphereGeometry(s * 0.3, 8, 8),
-    new THREE.MeshBasicMaterial({ color: 0xffeeaa }),
-  );
-  glow.position.z = -s * 1.1;
-  g.add(glow);
+
+  if (kind === "armor") {
+    // low-poly tank: hull + turret + barrel
+    const hull = new THREE.Mesh(new THREE.BoxGeometry(s * 1.6, s * 0.5, s * 2.2), mat);
+    g.add(hull);
+    const turret = new THREE.Mesh(new THREE.CylinderGeometry(s * 0.55, s * 0.65, s * 0.5, 8), dark);
+    turret.position.y = s * 0.5;
+    g.add(turret);
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(s * 0.1, s * 0.1, s * 1.6, 6), dark);
+    barrel.rotation.x = Math.PI / 2;
+    barrel.position.set(0, s * 0.5, s * 1.0);
+    g.add(barrel);
+  } else if (kind === "aircraft") {
+    // strike wing: fuselage cone + swept wings
+    const hull = new THREE.Mesh(new THREE.ConeGeometry(s * 0.55, s * 2.4, 6), mat);
+    hull.rotation.x = Math.PI / 2;
+    g.add(hull);
+    const wing = new THREE.Mesh(new THREE.BoxGeometry(s * 2.4, s * 0.12, s * 0.7), dark);
+    wing.position.z = -s * 0.35;
+    g.add(wing);
+    const glow = new THREE.Mesh(new THREE.SphereGeometry(s * 0.25, 8, 8), glowMat);
+    glow.position.z = -s * 1.2;
+    g.add(glow);
+  } else if (kind === "fleet") {
+    // capital ship: long hull + bridge + twin engines
+    const hull = new THREE.Mesh(new THREE.BoxGeometry(s * 0.8, s * 0.45, s * 3.0), mat);
+    g.add(hull);
+    const bow = new THREE.Mesh(new THREE.ConeGeometry(s * 0.45, s * 1.0, 4), mat);
+    bow.rotation.x = Math.PI / 2;
+    bow.position.z = s * 1.9;
+    g.add(bow);
+    const bridge = new THREE.Mesh(new THREE.BoxGeometry(s * 0.45, s * 0.55, s * 0.6), dark);
+    bridge.position.set(0, s * 0.45, -s * 0.7);
+    g.add(bridge);
+    for (const dx of [-0.3, 0.3]) {
+      const eng = new THREE.Mesh(new THREE.SphereGeometry(s * 0.18, 8, 8), glowMat);
+      eng.position.set(s * dx, 0, -s * 1.6);
+      g.add(eng);
+    }
+  } else {
+    // infantry corps: banner pole + flag + base block
+    const base = new THREE.Mesh(new THREE.BoxGeometry(s * 1.1, s * 0.35, s * 1.1), dark);
+    g.add(base);
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(s * 0.07, s * 0.07, s * 1.9, 6), mat);
+    pole.position.y = s * 1.1;
+    g.add(pole);
+    const flag = new THREE.Mesh(new THREE.BoxGeometry(s * 0.9, s * 0.55, s * 0.06), mat);
+    flag.position.set(s * 0.5, s * 1.7, 0);
+    g.add(flag);
+  }
   return g;
+}
+
+function slerpVec(a, b, t) {
+  const A = a.clone().normalize(), B = b.clone().normalize();
+  const dot = THREE.MathUtils.clamp(A.dot(B), -1, 1);
+  const th = Math.acos(dot);
+  if (th < 1e-5) return B;
+  const s = Math.sin(th);
+  return A.multiplyScalar(Math.sin((1 - t) * th) / s)
+          .add(B.multiplyScalar(Math.sin(t * th) / s));
 }
 
 function syncArmies(state) {
@@ -184,23 +280,33 @@ function syncArmies(state) {
   for (const a of state.armies) {
     seen.add(a.aid);
     const pos = latLonToVec3(a.lat, a.lon, GLOBE_R * 1.045);
+    const kind = dominantUnit(a.comp);
     let entry = armyMeshes.get(a.aid);
     if (!entry) {
-      const model = makeArmyModel(colours[a.fid] || "#ffffff", a.power);
+      const model = makeArmyModel(colours[a.fid] || "#ffffff", a.power, kind);
       armyGroup.add(model);
       model.position.copy(pos);
-      entry = { group: model, target: pos.clone(), power: a.power, fid: a.fid };
+      entry = {
+        group: model, target: pos.clone(), from: pos.clone(), t: 1,
+        power: a.power, fid: a.fid, kind,
+      };
       armyMeshes.set(a.aid, entry);
     }
-    entry.target.copy(pos);
+    if (entry.target.distanceToSquared(pos) > 1e-8) {
+      // new destination: start a great-circle hop from wherever we are now
+      entry.from = entry.group.position.clone();
+      entry.target.copy(pos);
+      entry.t = 0;
+    }
     entry.battle = a.in_battle;
-    if (Math.abs(entry.power - a.power) > entry.power * 0.3) {
-      // size changed a lot -> rebuild model
+    if (Math.abs(entry.power - a.power) > entry.power * 0.3 || entry.kind !== kind) {
       armyGroup.remove(entry.group);
-      entry.group = makeArmyModel(colours[a.fid] || "#ffffff", a.power);
-      entry.group.position.copy(entry.target);
+      entry.group = makeArmyModel(colours[a.fid] || "#ffffff", a.power, kind);
+      entry.group.position.copy(entry.target).normalize().multiplyScalar(GLOBE_R * 1.045);
       armyGroup.add(entry.group);
       entry.power = a.power;
+      entry.kind = kind;
+      entry.t = 1;
     }
   }
   for (const [aid, entry] of armyMeshes) {
@@ -251,14 +357,15 @@ scene.add(tradeGroup);
 let tradeKey = "";
 
 function syncTrade(state, regionLatLon) {
-  const key = JSON.stringify(state.trade_routes) + JSON.stringify(state.factions.map(f => f.capital));
+  const key = JSON.stringify(state.trade_routes) + JSON.stringify(state.blocked_routes || [])
+    + JSON.stringify(state.factions.map(f => f.capital));
   if (key === tradeKey) return;
   tradeKey = key;
   tradeGroup.clear();
-  const mat = new THREE.LineBasicMaterial({ color: 0x44dd88, transparent: true, opacity: 0.45 });
-  for (const [a, b] of state.trade_routes) {
+
+  const drawArc = (a, b, material, dashed) => {
     const fa = state.factions[a], fb = state.factions[b];
-    if (!fa.alive || !fb.alive) continue;
+    if (!fa.alive || !fb.alive || fa.capital < 0 || fb.capital < 0) return;
     const [la1, lo1] = regionLatLon(fa.capital);
     const [la2, lo2] = regionLatLon(fb.capital);
     const p1 = latLonToVec3(la1, lo1, GLOBE_R * 1.01);
@@ -267,8 +374,17 @@ function syncTrade(state, regionLatLon) {
       .multiplyScalar(GLOBE_R * (1.12 + p1.distanceTo(p2) * 0.22));
     const curve = new THREE.QuadraticBezierCurve3(p1, mid, p2);
     const geo = new THREE.BufferGeometry().setFromPoints(curve.getPoints(40));
-    tradeGroup.add(new THREE.Line(geo, mat));
-  }
+    const line = new THREE.Line(geo, material);
+    if (dashed) line.computeLineDistances();
+    tradeGroup.add(line);
+  };
+
+  const activeMat = new THREE.LineBasicMaterial({ color: 0x44dd88, transparent: true, opacity: 0.45 });
+  const blockedMat = new THREE.LineDashedMaterial({
+    color: 0xff5544, transparent: true, opacity: 0.55, dashSize: 0.035, gapSize: 0.03,
+  });
+  for (const [a, b] of state.trade_routes) drawArc(a, b, activeMat, false);
+  for (const [a, b] of (state.blocked_routes || [])) drawArc(a, b, blockedMat, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -282,22 +398,31 @@ const elDetail = document.getElementById("detail");
 const elDetailTitle = document.getElementById("detailTitle");
 const elDetailBody = document.getElementById("detailBody");
 
+const everAlive = new Set();
+
 function renderFactions(state) {
   const rows = [];
   for (const f of state.factions) {
+    if (f.alive) everAlive.add(f.fid);
+    // hide factions that never entered the stage (dormant rebels)
+    if (!f.alive && !everAlive.has(f.fid)) continue;
     const wars = f.at_war_with.map(i => state.factions[i].name.split(" ")[0]).join(", ");
     const allies = (state.diplomacy.alliances || [])
       .filter(p => p.includes(f.fid))
       .map(p => state.factions[p[0] === f.fid ? p[1] : p[0]].name.split(" ")[0]).join(", ");
+    const suzerain = f.suzerain >= 0 ? state.factions[f.suzerain].name.split(" ")[0] : "";
     const techStr = `M${f.tech.military} E${f.tech.economy} S${f.tech.science} I${f.tech.infrastructure}`;
+    const leader = f.leader ? f.leader.name : "—";
     rows.push(`
       <div class="fac ${f.alive ? "" : "dead"}" style="border-left-color:${f.colour}">
         <div class="name" style="color:${f.colour}">${f.name}
           ${wars ? `<span class="war-tag">⚔ ${wars}</span>` : ""}
           ${allies ? `<span class="ally-tag">🤝 ${allies}</span>` : ""}
+          ${suzerain ? `<span class="vassal-tag">⛓ ${suzerain}</span>` : ""}
         </div>
+        <div class="row"><span>👑 <b>${leader}</b></span><span><b>${f.doctrine}</b></span></div>
         <div class="row"><span>regions <b>${f.regions}</b></span><span>power <b>${f.power}</b></span><span>₢ <b>${f.treasury}</b></span></div>
-        <div class="row"><span>gdp <b>${f.gdp}</b></span><span>tech <b>${techStr}</b></span><span><b>${f.doctrine}</b></span></div>
+        <div class="row"><span>gdp <b>${f.gdp}</b></span><span>tech <b>${techStr}</b></span></div>
       </div>`);
   }
   elFacList.innerHTML = rows.join("");
@@ -399,6 +524,59 @@ document.getElementById("resetBtn").addEventListener("click", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Timeline scrubbing (history of ownership)
+// ---------------------------------------------------------------------------
+
+const tlSlider = document.getElementById("tlSlider");
+const tlLabel = document.getElementById("tlLabel");
+const tlLive = document.getElementById("tlLive");
+let timelineData = null;
+let scrubbing = false;
+
+async function refreshTimeline() {
+  try {
+    timelineData = await (await fetch("/api/timeline")).json();
+    if (!scrubbing && timelineData.keyframes.length) {
+      tlSlider.max = String(timelineData.keyframes.length - 1);
+      tlSlider.value = tlSlider.max;
+    }
+  } catch { /* server gone */ }
+  setTimeout(refreshTimeline, 8000);
+}
+refreshTimeline();
+
+function paintKeyframe(idx) {
+  if (!timelineData) return;
+  const kf = timelineData.keyframes[idx];
+  if (!kf) return;
+  const colours = {};
+  for (const f of timelineData.factions) colours[f.fid] = f.colour;
+  for (let row = 0; row < REGION_ROWS; row++) {
+    for (let col = 0; col < REGION_COLS; col++) {
+      const rid = row * REGION_COLS + col;
+      const own = kf.owner[rid];
+      texCtx.fillStyle = own >= 0 ? colours[own] : (rid % 2 ? NEUTRAL_COLOR : NEUTRAL_BRIGHT);
+      texCtx.fillRect(col * PX, (REGION_ROWS - 1 - row) * PX, PX, PX);
+    }
+  }
+  mapTexture.needsUpdate = true;
+  tlLabel.textContent = `tick ${kf.tick}`;
+}
+
+tlSlider.addEventListener("input", () => {
+  scrubbing = true;
+  tlLive.classList.remove("live");
+  paintKeyframe(parseInt(tlSlider.value, 10));
+});
+tlLive.addEventListener("click", () => {
+  scrubbing = false;
+  tlLive.classList.add("live");
+  tlLabel.textContent = "history";
+  if (timelineData) tlSlider.value = String(timelineData.keyframes.length - 1);
+  if (latestState) paintRegions(latestState);
+});
+
+// ---------------------------------------------------------------------------
 // Poll loop
 // ---------------------------------------------------------------------------
 
@@ -419,7 +597,7 @@ async function poll() {
     latestState = state;
     const rll = regionLatLonFactory(state);
     elTick.textContent = `tick ${state.tick}`;
-    paintRegions(state);
+    if (!scrubbing) paintRegions(state);
     syncArmies(state);
     spawnBattleFlashes(state, rll);
     syncTrade(state, rll);
@@ -442,12 +620,14 @@ function animate() {
   requestAnimationFrame(animate);
   const dt = clock.getDelta();
 
-  // smooth army movement toward targets + face travel direction
+  // armies travel along great-circle arcs with a small altitude hop
   for (const [, entry] of armyMeshes) {
     const g = entry.group;
-    if (!g.position.equals(entry.target)) {
-      g.position.lerp(entry.target, Math.min(1, dt * 2.2));
-      g.position.normalize().multiplyScalar(GLOBE_R * 1.045);
+    if (entry.t < 1) {
+      entry.t = Math.min(1, entry.t + dt * 1.6);
+      const dir = slerpVec(entry.from, entry.target, entry.t);
+      const hop = 0.06 * Math.sin(Math.PI * entry.t);
+      g.position.copy(dir.multiplyScalar(GLOBE_R * 1.045 + hop));
     }
     g.lookAt(0, 0, 0);
     if (entry.battle) {

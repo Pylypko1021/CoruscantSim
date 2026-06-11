@@ -30,6 +30,8 @@ SIM_DIR = Path(__file__).parent
 sys.path.insert(0, str(SIM_DIR))
 
 from strategy.engine import StrategyEngine, EngineConfig
+from strategy.chronicle import Chronicle, drain_major_events
+from strategy.notify import Notifier
 
 WEB_DIR = SIM_DIR / "web_viewer"
 SAVE_PATH = SIM_DIR / "rts_save.json"
@@ -40,6 +42,9 @@ _state_json: str = "{}"
 _speed: float = 2.0          # ticks per second
 _running = True
 _restart_seed: int | None = None
+_chronicle: Chronicle | None = None
+_notifier: Notifier | None = None
+_notify_last_id = 0
 
 
 def _refresh_state() -> None:
@@ -71,6 +76,16 @@ def _sim_loop(seed: int, use_physics: bool) -> None:
         with _lock:
             _engine.step()
             _refresh_state()
+            if _chronicle is not None:
+                _chronicle.collect(_engine)
+            if _notifier is not None and _notifier.enabled:
+                global _notify_last_id
+                fresh = drain_major_events(_engine, _notify_last_id)
+                if fresh:
+                    _notify_last_id = max(ev["id"] for ev in fresh)
+                    _notifier.queue(fresh)
+        if _notifier is not None:
+            _notifier.maybe_send(_engine.tick)
         elapsed = time.monotonic() - t0
         time.sleep(max(0.0, 1.0 / speed - elapsed))
 
@@ -120,6 +135,12 @@ class RTSHandler(BaseHTTPRequestHandler):
             self._json(payload)
             return
 
+        if path == "/api/timeline":
+            with _lock:
+                payload = json.dumps(_engine.timeline_snapshot())
+            self._json(payload)
+            return
+
         if path == "/api/region":
             try:
                 rid = int(qs.get("id", ["0"])[0])
@@ -141,6 +162,8 @@ class RTSHandler(BaseHTTPRequestHandler):
         if path == "/api/save":
             with _lock:
                 _engine.save(str(SAVE_PATH))
+                if _chronicle is not None:
+                    _chronicle.flush()
             self._json(json.dumps({"ok": True, "path": SAVE_PATH.name}))
             return
 
@@ -164,14 +187,28 @@ class RTSHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    global _speed
+    global _speed, _chronicle, _notifier
     parser = argparse.ArgumentParser(description="Coruscant autonomous RTS server")
     parser.add_argument("--port", type=int, default=8780)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--speed", type=float, default=2.0, help="ticks per second")
     parser.add_argument("--no-physics", action="store_true")
+    parser.add_argument("--chronicle", type=str, default=str(SIM_DIR / "chronicle.md"),
+                        help="markdown chronicle path ('' to disable)")
+    parser.add_argument("--discord-webhook", type=str, default=None)
+    parser.add_argument("--telegram-token", type=str, default=None)
+    parser.add_argument("--telegram-chat", type=str, default=None)
     args = parser.parse_args()
     _speed = args.speed
+
+    if args.chronicle:
+        _chronicle = Chronicle(args.chronicle)
+        print(f"[server] chronicle -> {args.chronicle}", flush=True)
+    _notifier = Notifier(discord_webhook=args.discord_webhook,
+                         telegram_token=args.telegram_token,
+                         telegram_chat=args.telegram_chat)
+    if _notifier.enabled:
+        print("[server] webhook notifications enabled", flush=True)
 
     thread = threading.Thread(
         target=_sim_loop, args=(args.seed, not args.no_physics), daemon=True)
@@ -190,6 +227,8 @@ def main() -> None:
     except KeyboardInterrupt:
         global _running
         _running = False
+        if _chronicle is not None:
+            _chronicle.flush()
         print("\n[server] stopped")
 
 

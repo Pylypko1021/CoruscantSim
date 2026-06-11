@@ -34,7 +34,9 @@ def run(ticks: int, seed: int = 42, use_physics: bool = True,
 def report(engine: StrategyEngine, elapsed: float = 0.0,
            verbose: bool = True) -> Dict:
     counts = {"war": 0, "peace": 0, "battle": 0, "capture": 0, "tech": 0,
-              "built": 0, "expand": 0, "elimination": 0, "alliance": 0}
+              "built": 0, "expand": 0, "elimination": 0, "alliance": 0,
+              "vassal": 0, "independence": 0, "rebellion": 0, "leader": 0,
+              "capital": 0}
     for ev in engine.events:
         if ev["type"] in counts:
             counts[ev["type"]] += 1

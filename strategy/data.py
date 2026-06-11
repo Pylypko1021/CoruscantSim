@@ -144,6 +144,29 @@ FACTIONS: List[FactionDef] = [
     FactionDef(2, "Commerce Ring",     "#34bf4f", 0.25, 0.95, 0.50,  30.0, 180.0),
     FactionDef(3, "Underworld Cartel", "#cc9918", 0.75, 0.45, 0.25, -50.0, 270.0),
     FactionDef(4, "Military Junta",    "#8c1ac0", 0.65, 0.35, 0.45,  60.0, 135.0),
+    # Dormant rebel faction: born from uprisings, can rise and fall repeatedly.
+    FactionDef(5, "Free Coruscant",    "#e8e8e8", 0.90, 0.30, 0.20,   0.0,   0.0),
+]
+
+REBEL_FID = 5
+PLAYABLE_FIDS = (0, 1, 2, 3, 4)
+
+
+# ---------------------------------------------------------------------------
+# Faction leaders (generational characters)
+# ---------------------------------------------------------------------------
+
+LEADER_FIRST = [
+    "Adan", "Bryn", "Corin", "Daxa", "Eron", "Fenn", "Garek", "Hale",
+    "Ilya", "Joren", "Kessa", "Lor", "Mira", "Nyx", "Orin", "Palla",
+    "Quill", "Rancis", "Sela", "Tovan", "Ula", "Vex", "Wrenn", "Xara",
+    "Yent", "Zorba",
+]
+LEADER_LAST = [
+    "Antilles", "Bonteri", "Cassan", "Drayen", "Elaris", "Farr",
+    "Greyshade", "Hask", "Iblis", "Jathmir", "Krennet", "Lassic",
+    "Mothma", "Noor", "Organa", "Pamlo", "Quor", "Ransolm", "Sondiv",
+    "Taa", "Ulgo", "Valor", "Wessex", "Xandel", "Yendar", "Zaarin",
 ]
 
 
@@ -153,20 +176,20 @@ FACTIONS: List[FactionDef] = [
 
 BALANCE = {
     # economy
-    "tax_per_pop": 0.10,            # credits per million pop per tick
+    "tax_per_pop": 0.1101,            # credits per million pop per tick
     "food_per_pop": 0.08,           # food consumed per million pop per tick
     "base_food_per_fertility": 2.5,  # subsistence hydroponics per region
     "base_energy_per_potential": 2.0,
     "base_materials_per_richness": 0.8,
     "pop_soft_cap": 200.0,          # millions, scaled by infrastructure
-    "pop_growth_rate": 0.0025,      # per tick when fed and calm
+    "pop_growth_rate": 0.00258,      # per tick when fed and calm
     "starvation_rate": 0.012,       # pop loss per tick when starving
     "market_price_materials": 0.8,  # credits per surplus material auto-sold
     "trade_income_per_route": 6.0,  # credits per tick per active trade route
 
     # combat
     "combat_intensity": 0.16,       # casualty fraction scale per tick
-    "defender_home_bonus": 1.25,
+    "defender_home_bonus": 1.60,
     "entrench_per_tick": 0.02,      # garrison entrenchment growth, cap 0.3
     "rout_ratio": 0.38,             # power ratio below which side retreats
     "capture_devastation": 0.30,
@@ -174,8 +197,8 @@ BALANCE = {
 
     # diplomacy
     "war_relation_threshold": -45.0,
-    "war_advantage_required": 1.25,
-    "weariness_per_tick": 0.18,
+    "war_advantage_required": 1.27,
+    "weariness_per_tick": 0.242,
     "weariness_losing_mult": 2.2,
     "peace_weariness": 62.0,
     "border_friction": 0.18,
@@ -183,6 +206,24 @@ BALANCE = {
 
     # ai
     "garrison_fraction": 0.35,      # share of military kept home
-    "expansion_army_power": 25.0,   # min power before claiming neutrals
+    "expansion_army_power": 27.6,   # min power before claiming neutrals
     "doctrine_inertia": 25,         # ticks before doctrine can flip
+
+    # vassalage
+    "vassal_max_regions": 6,        # loser this small capitulates instead of peace
+    "vassal_war_score": 4.0,        # min |war score| for capitulation
+    "vassal_tribute": 0.20,         # share of vassal income paid to suzerain
+    "independence_power_ratio": 0.9,  # vassal/suzerain power to dare revolt
+    "independence_chance": 0.012,   # per-tick chance once strong enough
+
+    # rebellions
+    "rebellion_unrest": 0.94,       # unrest level that risks uprising
+    "rebellion_chance": 0.008,      # per-tick chance in a boiling region
+    "rebellion_grace_ticks": 200,   # no uprisings while societies settle
+    "war_unrest_per_tick": 0.0006,  # war exhaustion felt by civilians
+    "rebel_army_per_pop": 0.10,     # rebel infantry per million pop
+
+    # leaders
+    "leader_tenure_min": 1200,
+    "leader_tenure_max": 3500,
 }

@@ -30,13 +30,18 @@ def assert_true(name: str, condition: bool):
 def test_world_setup():
     eng = StrategyEngine(EngineConfig(seed=1, use_physics=False))
     assert_true("region count", len(eng.world.regions) == N_REGIONS)
+    assert_true("six factions (5 + rebels)", len(eng.factions) == 6)
     owned = [r for r in eng.world.regions if r.owner >= 0]
     assert_true("factions seeded", len(owned) == 5 * eng.cfg.start_regions_per_faction)
-    assert_true("five capitals", len({f.capital for f in eng.factions}) == 5)
-    for f in eng.factions:
+    playable = [f for f in eng.factions if f.fid != 5]
+    assert_true("five capitals", len({f.capital for f in playable}) == 5)
+    rebels = eng.factions[5]
+    assert_true("rebels dormant", not rebels.alive and rebels.capital == -1)
+    for f in playable:
         cap = eng.world.regions[f.capital]
         assert_true("capital owned", cap.owner == f.fid)
         assert_true("capital has factory", cap.buildings.get("factory", 0) >= 1)
+        assert_true("has leader", f.leader is not None and len(f.leader.name) > 3)
     # adjacency sanity: every region has 3-4 neighbours, all valid
     for r in eng.world.regions:
         ns = eng.world.neighbours(r.rid)
@@ -160,7 +165,9 @@ def test_snapshot_schema():
         eng.step()
     snap = eng.snapshot()
     encoded = json.dumps(snap)            # must not raise
-    assert_true("snapshot has factions", len(snap["factions"]) == 5)
+    assert_true("snapshot has factions", len(snap["factions"]) == 6)
+    json.dumps(eng.timeline_snapshot())   # timeline endpoint payload
+    assert_true("timeline keyframes", len(eng.timeline) > 0)
     assert_true("snapshot owners", len(snap["regions"]["owner"]) == N_REGIONS)
     assert_true("snapshot armies list", isinstance(snap["armies"], list))
     assert_true("snapshot charts", len(snap["charts"]["tick"]) > 0)
@@ -171,7 +178,113 @@ def test_snapshot_schema():
 
 
 # ---------------------------------------------------------------------------
-# 7. Physics coupling smoke test
+# 7. Vassalization: crushing defeat of a small power -> capitulation
+# ---------------------------------------------------------------------------
+
+def test_vassalization():
+    eng = StrategyEngine(EngineConfig(seed=13, use_physics=False))
+    eng.diplomacy.declare_war(eng, 0, 1, "test")
+    # faction 1 is small and badly losing
+    regions_1 = eng.world.owned_by(1)
+    for r in regions_1[3:]:
+        r.owner = 0
+    eng.diplomacy.war_score[(0, 1)] = 10.0
+    eng.diplomacy.war_score[(1, 0)] = -10.0
+    eng.diplomacy.make_peace(eng, 0, 1)
+    assert_true("vassalized", eng.diplomacy.suzerain_of(1) == 0)
+    assert_true("war ended", not eng.diplomacy.at_war(0, 1))
+    assert_true("vassal cannot be re-vassalized pair", 1 in eng.diplomacy.vassals)
+    # tribute flows
+    f1 = eng.factions[1]
+    f0 = eng.factions[0]
+    f1.income = 100.0
+    t0 = f0.treasury
+    for _ in range(3):
+        eng.step()
+    assert_true("suzerain treasury grew", f0.treasury > t0)
+
+
+# ---------------------------------------------------------------------------
+# 8. Rebellion: a boiling region rises up
+# ---------------------------------------------------------------------------
+
+def test_rebellion():
+    from strategy.data import BALANCE
+    old_chance = BALANCE["rebellion_chance"]
+    old_grace = BALANCE["rebellion_grace_ticks"]
+    BALANCE["rebellion_chance"] = 1.0
+    BALANCE["rebellion_grace_ticks"] = 0
+    try:
+        eng = StrategyEngine(EngineConfig(seed=21, use_physics=False))
+        reg = eng.world.owned_by(2)[1]
+        reg.unrest = 0.95
+        eng.step()
+        assert_true("region defected", reg.owner == 5)
+        rebels = eng.factions[5]
+        assert_true("rebels alive", rebels.alive)
+        assert_true("rebels at war", eng.diplomacy.at_war(5, 2))
+        assert_true("rebel army spawned",
+                    any(a.fid == 5 and a.location == reg.rid for a in eng.armies))
+        assert_true("rebellion logged",
+                    any(ev["type"] == "rebellion" for ev in eng.events))
+    finally:
+        BALANCE["rebellion_chance"] = old_chance
+        BALANCE["rebellion_grace_ticks"] = old_grace
+
+
+# ---------------------------------------------------------------------------
+# 9. Trade corridor blockade
+# ---------------------------------------------------------------------------
+
+def test_trade_blockade():
+    eng = StrategyEngine(EngineConfig(seed=17, use_physics=False))
+    eng.diplomacy.relations[0, 2] = eng.diplomacy.relations[2, 0] = 60.0
+    assert_true("route open through neutrals",
+                (0, 2) in eng.trade_pairs())
+    # wall the planet: everything except the two capitals belongs to faction 3,
+    # which is at war with faction 0
+    cap0 = eng.factions[0].capital
+    cap2 = eng.factions[2].capital
+    for r in eng.world.regions:
+        if r.rid not in (cap0, cap2):
+            r.owner = 3
+    eng.diplomacy.declare_war(eng, 0, 3, "test wall")
+    eng._trade_cache_tick = -1          # invalidate cache
+    assert_true("route blocked by hostile wall",
+                (0, 2) in eng.blocked_routes() and (0, 2) not in eng.trade_pairs())
+
+
+# ---------------------------------------------------------------------------
+# 10. Chronicle + notifier formatting
+# ---------------------------------------------------------------------------
+
+def test_chronicle_and_notify():
+    from strategy.chronicle import Chronicle, drain_major_events
+    from strategy.notify import format_batch
+
+    eng = StrategyEngine(EngineConfig(seed=31, use_physics=False))
+    path = os.path.join(tempfile.gettempdir(), "coruscant_chronicle_test.md")
+    if os.path.exists(path):
+        os.remove(path)
+    chron = Chronicle(path, flush_every=1)
+    for _ in range(300):
+        eng.step()
+    chron.collect(eng)
+    chron.flush()
+    text = open(path, encoding="utf-8").read()
+    assert_true("chronicle has header", "Chronicle of Coruscant" in text)
+    assert_true("chronicle has entries", text.count("**Year") >= 1)
+    os.remove(path)
+
+    major = drain_major_events(eng, 0)
+    assert_true("major events exist", len(major) > 0)
+    msg = format_batch(major, eng.tick)
+    assert_true("notify message non-empty", len(msg) > 10)
+    assert_true("notify message capped", len(msg.splitlines()) <= 13)
+
+
+# ---------------------------------------------------------------------------
+# 11. Physics coupling smoke test
 # ---------------------------------------------------------------------------
 
 def test_physics_coupling():
@@ -194,6 +307,14 @@ if __name__ == "__main__":
     print("ok: save/load")
     test_snapshot_schema()
     print("ok: snapshot schema")
+    test_vassalization()
+    print("ok: vassalization")
+    test_rebellion()
+    print("ok: rebellion")
+    test_trade_blockade()
+    print("ok: trade blockade")
+    test_chronicle_and_notify()
+    print("ok: chronicle + notify")
     test_physics_coupling()
     print("ok: physics coupling")
     test_long_run_invariants()

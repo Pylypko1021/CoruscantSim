@@ -27,6 +27,7 @@ class Diplomacy:
         self.truces: Dict[Tuple[int, int], int] = {}     # pair -> ticks left
         self.war_score: Dict[Tuple[int, int], float] = {}  # (a, b): score for a
         self.alliances: Set[Tuple[int, int]] = set()
+        self.vassals: Dict[int, int] = {}                # vassal fid -> suzerain fid
 
     # ------------------------------------------------------------------
 
@@ -52,6 +53,38 @@ class Diplomacy:
                 out.append(a)
         return out
 
+    def suzerain_of(self, fid: int) -> int:
+        """Suzerain fid or -1 if independent."""
+        return self.vassals.get(fid, -1)
+
+    def vassals_of(self, fid: int) -> List[int]:
+        return [v for v, s in self.vassals.items() if s == fid]
+
+    def vassalize(self, engine: "StrategyEngine", vassal: int, suzerain: int) -> None:
+        # flatten chains: my vassal's vassals become my vassals
+        for v in self.vassals_of(vassal):
+            self.vassals[v] = suzerain
+        # the new vassal cannot itself be a suzerain target loop
+        self.vassals[vassal] = suzerain
+        pair = self._pair(vassal, suzerain)
+        self.wars.discard(pair)
+        self.truces[pair] = 400
+        self.relations[vassal, suzerain] = self.relations[suzerain, vassal] = 40.0
+        engine.factions[vassal].war_weariness.pop(suzerain, None)
+        engine.factions[suzerain].war_weariness.pop(vassal, None)
+        engine.log("vassal",
+                   f"{engine.factions[vassal].name} capitulated and became "
+                   f"a vassal of {engine.factions[suzerain].name}",
+                   fid=suzerain, target=vassal)
+
+    def free_vassal(self, engine: "StrategyEngine", vassal: int, reason: str) -> None:
+        suzerain = self.vassals.pop(vassal, -1)
+        if suzerain >= 0:
+            engine.log("independence",
+                       f"{engine.factions[vassal].name} broke free from "
+                       f"{engine.factions[suzerain].name} ({reason})",
+                       fid=vassal, target=suzerain)
+
     # ------------------------------------------------------------------
 
     def declare_war(self, engine: "StrategyEngine", a: int, b: int, reason: str) -> None:
@@ -73,10 +106,21 @@ class Diplomacy:
         pair = self._pair(a, b)
         if pair not in self.wars:
             return
-        self.wars.discard(pair)
-        self.truces[pair] = 250
         score = self.war_score.get((a, b), 0.0)
         winner, loser = (a, b) if score > 0 else (b, a)
+
+        # crushing defeat of a small power -> capitulation, not peace
+        loser_regions = len(engine.world.owned_by(loser))
+        if (abs(score) >= BALANCE["vassal_war_score"]
+                and 0 < loser_regions <= BALANCE["vassal_max_regions"]
+                and loser not in self.vassals
+                and winner not in self.vassals):
+            self.wars.discard(pair)
+            self.vassalize(engine, loser, winner)
+            return
+
+        self.wars.discard(pair)
+        self.truces[pair] = 250
         reparations = min(engine.factions[loser].treasury * 0.25, 800.0)
         if abs(score) > 1.0 and reparations > 0:
             engine.factions[loser].treasury -= reparations
@@ -162,6 +206,32 @@ class Diplomacy:
                     and fa.war_weariness.get(b, 0) > B["peace_weariness"] * 0.6):
                 self.make_peace(engine, a, b)
 
+        # vassal politics
+        for vassal_fid in list(self.vassals.keys()):
+            suzerain_fid = self.vassals[vassal_fid]
+            fv = engine.factions[vassal_fid]
+            fs = engine.factions[suzerain_fid]
+            if not fv.alive:
+                self.vassals.pop(vassal_fid, None)
+                continue
+            if not fs.alive:
+                self.free_vassal(engine, vassal_fid, "the suzerain has fallen")
+                continue
+            # wars of independence: dare to revolt once strong enough,
+            # or when the suzerain is bogged down in war
+            ratio = fv.military_power / max(fs.military_power, 1.0)
+            suzerain_at_war = bool(self.enemies_of(suzerain_fid))
+            chance = BALANCE["independence_chance"]
+            if suzerain_at_war:
+                chance *= 2.5
+            if ratio >= BALANCE["independence_power_ratio"] and \
+                    self.rng.random() < chance:
+                self.free_vassal(engine, vassal_fid, "war of independence")
+                pair = self._pair(vassal_fid, suzerain_fid)
+                self.truces.pop(pair, None)
+                self.declare_war(engine, vassal_fid, suzerain_fid,
+                                 "war of independence")
+
         # alliances: very friendly + shared threat
         for fa in alive:
             for fb in alive:
@@ -186,5 +256,6 @@ class Diplomacy:
         return {
             "wars": sorted(list(self.wars)),
             "alliances": sorted(list(self.alliances)),
+            "vassals": dict(self.vassals),
             "relations": np.round(self.relations, 1).tolist(),
         }

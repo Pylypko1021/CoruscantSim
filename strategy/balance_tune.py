@@ -40,6 +40,8 @@ TUNABLE = {
     "expansion_army_power": (10.0, 60.0),
     "tax_per_pop": (0.04, 0.3),
     "pop_growth_rate": (0.001, 0.006),
+    "rebellion_unrest": (0.70, 0.95),
+    "rebellion_chance": (0.002, 0.03),
 }
 
 RESULTS = Path(__file__).with_name("balance_results.tsv")
@@ -70,6 +72,11 @@ def evaluate(ticks: int, seeds: list[int]) -> dict:
         score += min(wars, 8) * 4.0 - max(0, wars - 12) * 2.0
         score += min(counts["peace"], 8) * 2.0
         score += min(counts["capture"], 30) * 0.8
+        # uprisings: spice, not the main dish
+        rebellions = counts.get("rebellion", 0)
+        score += min(rebellions, 6) * 2.0 - max(0, rebellions - 10) * 3.0
+        score += min(counts.get("vassal", 0), 3) * 3.0
+        score += min(counts.get("independence", 0), 2) * 3.0
         # expansion: map should fill up
         claimed = 288 - rep["neutral_regions"]
         score += claimed * 0.15

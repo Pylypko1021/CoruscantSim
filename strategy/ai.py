@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, TYPE_CHECKING
 
 import numpy as np
 
-from strategy.data import BALANCE, BUILDINGS, UNITS, TECH_BRANCHES
+from strategy.data import BALANCE, BUILDINGS, UNITS, TECH_BRANCHES, REBEL_FID
 from strategy.state import Army, FactionRuntime
 from strategy.world import Region
 
@@ -279,18 +279,29 @@ def _garrison_at(engine: "StrategyEngine", fid: int, rid: int) -> Optional[Army]
 # ---------------------------------------------------------------------------
 
 def _consider_war(engine: "StrategyEngine", fac: FactionRuntime) -> None:
+    if fac.fid == REBEL_FID:
+        return                                  # rebels fight oppressors only
     if engine.diplomacy.enemies_of(fac.fid):
         return                                  # one war at a time
+    if engine.diplomacy.suzerain_of(fac.fid) >= 0:
+        return                                  # vassals follow, not lead
     B = BALANCE
     for other in engine.factions:
         if other.fid == fac.fid or not other.alive:
             continue
+        if engine.diplomacy.suzerain_of(other.fid) >= 0:
+            continue                            # vassals are under protection
         rel = engine.diplomacy.relations[fac.fid, other.fid]
         if rel > B["war_relation_threshold"]:
             continue
         if engine.diplomacy._pair(fac.fid, other.fid) in engine.diplomacy.truces:
             continue
         advantage = fac.military_power / max(other.military_power, 1.0)
+        # a suzerain's strength shields... and a vassal's strength feeds its lord
+        suz_vassals = engine.diplomacy.vassals_of(other.fid)
+        for v in suz_vassals:
+            advantage *= 1.0 / (1.0 + 0.3 * (engine.factions[v].military_power
+                                             / max(fac.military_power, 1.0)))
         # allies of the target deter aggression
         for ally in engine.factions:
             if ally.alive and ally.fid not in (fac.fid, other.fid) and \
@@ -347,8 +358,8 @@ def _army_orders(engine: "StrategyEngine", fac: FactionRuntime) -> None:
             _send(engine, a, target[0], "attack")
 
     # 3) expansion: at peace, claim adjacent neutral regions (any doctrine,
-    #    but keep a garrison at the capital)
-    else:
+    #    but keep a garrison at the capital). Rebels never colonize.
+    elif fac.fid != REBEL_FID:
         neutrals = _adjacent_neutrals(engine, fac.fid)
         threshold = BALANCE["expansion_army_power"] * 0.6
         expeditions: List[Army] = []

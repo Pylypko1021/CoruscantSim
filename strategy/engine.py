@@ -21,12 +21,12 @@ from typing import Dict, List, Optional
 import numpy as np
 
 from strategy.data import (
-    BALANCE, BUILDINGS, UNITS, FACTIONS,
+    BALANCE, BUILDINGS, UNITS, FACTIONS, REBEL_FID, PLAYABLE_FIDS,
     ECO_INCOME_PER_TIER, ECO_TRADE_PER_TIER, SCI_RATE_PER_TIER,
     INFRA_PROD_PER_TIER,
 )
 from strategy.world import WorldMap, Region, N_REGIONS, REGION_COLS
-from strategy.state import FactionRuntime, Army, make_factions
+from strategy.state import FactionRuntime, Army, Leader, make_factions
 from strategy.diplomacy import Diplomacy
 from strategy import combat as combat_mod
 from strategy import ai as ai_mod
@@ -53,7 +53,9 @@ class StrategyEngine:
         self.armies: List[Army] = []
         self.diplomacy = Diplomacy(self.rng)
         self.events: deque = deque(maxlen=2000)
+        self.event_seq = 0                      # monotonic id for consumers
         self.battles_recent: deque = deque(maxlen=60)
+        self.timeline: deque = deque(maxlen=400)   # ownership keyframes
         self.charts: Dict[str, List] = {
             "tick": [],
             "regions": [[] for _ in self.factions],
@@ -93,7 +95,11 @@ class StrategyEngine:
 
     def _seed_world(self) -> None:
         """Give each faction a capital + nearby starting regions and a small army."""
+        for fac in self.factions:
+            fac.leader = Leader.generate(self.rng)
         for fdef, fac in zip(FACTIONS, self.factions):
+            if fdef.fid not in PLAYABLE_FIDS:
+                continue
             # nearest region to the lore seed point
             best = min(
                 self.world.regions,
@@ -128,7 +134,9 @@ class StrategyEngine:
     # ------------------------------------------------------------------
 
     def log(self, etype: str, text: str, **meta) -> None:
-        self.events.append({"tick": self.tick, "type": etype, "text": text, **meta})
+        self.event_seq += 1
+        self.events.append({"id": self.event_seq, "tick": self.tick,
+                            "type": etype, "text": text, **meta})
 
     # ------------------------------------------------------------------
     # Main loop
@@ -152,10 +160,17 @@ class StrategyEngine:
         self._movement_tick()
         self._combat_tick()
         self.diplomacy.step(self)
+        self._rebellion_tick()
+        self._leader_tick()
         self._cleanup()
 
         if self.tick % self.cfg.chart_every == 0:
             self._record_charts()
+        if self.tick % 25 == 0:
+            self.timeline.append({
+                "tick": self.tick,
+                "owner": [r.owner for r in self.world.regions],
+            })
 
     # ------------------------------------------------------------------
     # Economy
@@ -249,6 +264,14 @@ class StrategyEngine:
                         (1.0 + ECO_TRADE_PER_TIER * fac.tech["economy"]) * \
                         min(trade_capacity / 10.0 + 0.5, 3.0)
 
+            income *= fac.stewardship_mult()
+
+            # war exhaustion: long wars erode civilian patience
+            if self.diplomacy.enemies_of(fac.fid):
+                for reg in regions:
+                    reg.unrest = min(1.0, reg.unrest + B["war_unrest_per_tick"]
+                                     + 0.0015 * reg.devastation)
+
             fac.income = income + trade_income - upkeep
             fac.treasury = max(0.0, fac.treasury + fac.income)
             fac.science += science_gain
@@ -267,19 +290,57 @@ class StrategyEngine:
                         a.apply_losses(0.05)
                         break
 
+        # vassal tribute flows after everyone's income is settled
+        for vassal_fid, suzerain_fid in list(self.diplomacy.vassals.items()):
+            fv, fs = self.factions[vassal_fid], self.factions[suzerain_fid]
+            if fv.alive and fs.alive and fv.income > 0:
+                tribute = fv.income * BALANCE["vassal_tribute"]
+                fv.treasury = max(0.0, fv.treasury - tribute)
+                fs.treasury += tribute
+
     def trade_pairs(self) -> List[tuple]:
-        """Pairs of factions with an active trade relationship."""
-        out = []
+        """Active trade routes (friendly pair + open physical corridor)."""
+        return self._trade_routes()[0]
+
+    def blocked_routes(self) -> List[tuple]:
+        """Friendly pairs whose corridor is cut by hostile territory."""
+        return self._trade_routes()[1]
+
+    def _trade_routes(self) -> tuple:
+        if getattr(self, "_trade_cache_tick", -1) == self.tick:
+            return self._trade_cache
+        active, blocked = [], []
         for a in self.factions:
             for b in self.factions:
                 if a.fid >= b.fid or not (a.alive and b.alive):
                     continue
                 if self.diplomacy.at_war(a.fid, b.fid):
                     continue
-                if self.diplomacy.allied(a.fid, b.fid) or \
-                        self.diplomacy.relations[a.fid, b.fid] > 20.0:
-                    out.append((a.fid, b.fid))
-        return out
+                if not (self.diplomacy.allied(a.fid, b.fid)
+                        or self.diplomacy.relations[a.fid, b.fid] > 20.0):
+                    continue
+                if a.capital < 0 or b.capital < 0:
+                    continue
+                if self._corridor_open(a.fid, b.fid):
+                    active.append((a.fid, b.fid))
+                else:
+                    blocked.append((a.fid, b.fid))
+        self._trade_cache = (active, blocked)
+        self._trade_cache_tick = self.tick
+        return self._trade_cache
+
+    def _corridor_open(self, fid_a: int, fid_b: int) -> bool:
+        """True if a path of non-hostile regions links the two capitals.
+        Hostile = owned by anyone at war with either trading partner."""
+        def passable(rid: int) -> bool:
+            owner = self.world.regions[rid].owner
+            if owner == -1 or owner in (fid_a, fid_b):
+                return True
+            return not (self.diplomacy.at_war(owner, fid_a)
+                        or self.diplomacy.at_war(owner, fid_b))
+        path = self.world.shortest_path(
+            self.factions[fid_a].capital, self.factions[fid_b].capital, passable)
+        return path is not None
 
     def border_pairs(self) -> set:
         pairs = set()
@@ -391,21 +452,113 @@ class StrategyEngine:
                          region=reg.rid, fid=reg.owner)
 
     # ------------------------------------------------------------------
+    # Rebellions
+    # ------------------------------------------------------------------
+
+    def _rebellion_tick(self) -> None:
+        B = BALANCE
+        if self.tick < B["rebellion_grace_ticks"]:
+            return
+        rebels = self.factions[REBEL_FID]
+        for reg in self.world.regions:
+            if reg.owner < 0 or reg.owner == REBEL_FID:
+                continue
+            if reg.unrest < B["rebellion_unrest"]:
+                continue
+            if self.rng.random() >= B["rebellion_chance"]:
+                continue
+
+            old_owner = reg.owner
+            reg.owner = REBEL_FID
+            reg.unrest = 0.25                  # hope of freedom
+            reg.entrenchment = 0.15
+            reg.construction.clear()
+
+            n_rebels = max(4, int(reg.population * B["rebel_army_per_pop"]))
+            self.armies.append(Army.new(
+                REBEL_FID, reg.rid, {"infantry": n_rebels}, "defend"))
+
+            if not rebels.alive:
+                rebels.alive = True
+                rebels.capital = reg.rid
+                rebels.treasury = 200.0
+                rebels.leader = Leader.generate(self.rng)
+                self.log("rebellion",
+                         f"UPRISING! {rebels.leader.name} raises the banner of "
+                         f"Free Coruscant in region {reg.rid}, torn from "
+                         f"{self.factions[old_owner].name}",
+                         fid=REBEL_FID, region=reg.rid, target=old_owner)
+            else:
+                if self.world.regions[rebels.capital].owner != REBEL_FID:
+                    rebels.capital = reg.rid
+                self.log("rebellion",
+                         f"Region {reg.rid} joins the Free Coruscant uprising "
+                         f"against {self.factions[old_owner].name}",
+                         fid=REBEL_FID, region=reg.rid, target=old_owner)
+
+            self.diplomacy.declare_war(self, REBEL_FID, old_owner, "uprising")
+            self.check_faction_elimination(old_owner)
+
+    # ------------------------------------------------------------------
+    # Leaders
+    # ------------------------------------------------------------------
+
+    def _leader_tick(self) -> None:
+        for fac in self.factions:
+            if not fac.alive or fac.leader is None:
+                continue
+            fac.leader.tenure_left -= 1
+            if fac.leader.tenure_left <= 0:
+                old = fac.leader.name
+                fac.leader = Leader.generate(self.rng)
+                self.log("leader",
+                         f"{old} of {fac.name} steps down; "
+                         f"{fac.leader.name} takes power "
+                         f"(martial {fac.leader.martial:.2f}, "
+                         f"stewardship {fac.leader.stewardship:.2f})",
+                         fid=fac.fid)
+
+    # ------------------------------------------------------------------
     # Bookkeeping
     # ------------------------------------------------------------------
+
+    def handle_capital_loss(self, fid: int, lost_rid: int) -> None:
+        fac = self.factions[fid]
+        if fac.capital != lost_rid:
+            return
+        owned = self.world.owned_by(fid)
+        owned = [r for r in owned if r.rid != lost_rid]
+        if owned:
+            new_cap = max(owned, key=lambda r: r.population)
+            fac.capital = new_cap.rid
+            self.log("capital",
+                     f"The capital of {fac.name} falls! Government flees "
+                     f"to region {new_cap.rid}", fid=fid, region=new_cap.rid)
 
     def check_faction_elimination(self, fid: int) -> None:
         fac = self.factions[fid]
         if fac.alive and not self.world.owned_by(fid):
             fac.alive = False
+            fac.capital = -1
             for a in self.armies:
                 if a.fid == fid:
                     a.composition.clear()
             for other in self.factions:
+                if other.fid == fid:
+                    continue
                 pair = self.diplomacy._pair(fid, other.fid)
                 self.diplomacy.wars.discard(pair)
                 self.diplomacy.alliances.discard(pair)
-            self.log("elimination", f"{fac.name} has been wiped from the planet", fid=fid)
+            self.diplomacy.vassals.pop(fid, None)
+            for v in self.diplomacy.vassals_of(fid):
+                self.diplomacy.free_vassal(self, v, "the suzerain has fallen")
+            if fid == REBEL_FID:
+                self.log("elimination",
+                         "The Free Coruscant uprising has been crushed... for now",
+                         fid=fid)
+            else:
+                self.log("elimination",
+                         f"{fac.name} has been wiped from the planet", fid=fid)
 
     def _cleanup(self) -> None:
         self.armies = [a for a in self.armies if a.size() > 0]
@@ -471,6 +624,11 @@ class StrategyEngine:
                 "research_target": f.research_target,
                 "at_war_with": self.diplomacy.enemies_of(f.fid),
                 "capital": f.capital,
+                "leader": ({"name": f.leader.name,
+                            "martial": round(f.leader.martial, 2),
+                            "stewardship": round(f.leader.stewardship, 2)}
+                           if f.leader else None),
+                "suzerain": self.diplomacy.suzerain_of(f.fid),
             }
             for f in self.factions
         ]
@@ -486,6 +644,14 @@ class StrategyEngine:
             "events": list(self.events)[-40:],
             "charts": self.charts,
             "trade_routes": self.trade_pairs(),
+            "blocked_routes": self.blocked_routes(),
+        }
+
+    def timeline_snapshot(self) -> Dict:
+        return {
+            "keyframes": list(self.timeline),
+            "factions": [{"fid": f.fid, "colour": f.colour, "name": f.name}
+                         for f in self.factions],
         }
 
     def region_detail(self, rid: int) -> Dict:
@@ -540,6 +706,10 @@ class StrategyEngine:
                     "tech": f.tech, "doctrine": f.doctrine,
                     "capital": f.capital,
                     "war_weariness": {str(k): v for k, v in f.war_weariness.items()},
+                    "leader": ({"name": f.leader.name, "martial": f.leader.martial,
+                                "stewardship": f.leader.stewardship,
+                                "tenure_left": f.leader.tenure_left}
+                               if f.leader else None),
                 }
                 for f in self.factions
             ],
@@ -557,6 +727,7 @@ class StrategyEngine:
                 "alliances": sorted(list(self.diplomacy.alliances)),
                 "truces": {f"{k[0]},{k[1]}": v for k, v in self.diplomacy.truces.items()},
                 "war_score": {f"{k[0]},{k[1]}": v for k, v in self.diplomacy.war_score.items()},
+                "vassals": {str(k): v for k, v in self.diplomacy.vassals.items()},
             },
         }
         with open(path, "w", encoding="utf-8") as f:
@@ -592,6 +763,10 @@ class StrategyEngine:
             f.doctrine = fdata["doctrine"]
             f.capital = fdata["capital"]
             f.war_weariness = {int(k): v for k, v in fdata["war_weariness"].items()}
+            ld = fdata.get("leader")
+            f.leader = Leader(name=ld["name"], martial=ld["martial"],
+                              stewardship=ld["stewardship"],
+                              tenure_left=ld["tenure_left"]) if ld else None
 
         for adata in data["armies"]:
             army = Army(aid=adata["aid"], fid=adata["fid"],
@@ -609,5 +784,8 @@ class StrategyEngine:
         }
         engine.diplomacy.war_score = {
             tuple(int(x) for x in k.split(",")): v for k, v in d["war_score"].items()
+        }
+        engine.diplomacy.vassals = {
+            int(k): v for k, v in d.get("vassals", {}).items()
         }
         return engine

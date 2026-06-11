@@ -8,7 +8,28 @@ from typing import Dict, List, Optional
 from strategy.data import (
     BALANCE, FACTIONS, TECH_BRANCHES, TECH_COST_BASE, TECH_COST_GROWTH,
     MIL_ATTACK_PER_TIER, MIL_DEFENSE_PER_TIER, UNITS,
+    LEADER_FIRST, LEADER_LAST, REBEL_FID,
 )
+
+
+@dataclass
+class Leader:
+    name: str
+    martial: float       # 0.8..1.3 — combat multiplier
+    stewardship: float   # 0.8..1.3 — income multiplier
+    tenure_left: int     # ticks until succession
+
+    @staticmethod
+    def generate(rng) -> "Leader":
+        name = f"{LEADER_FIRST[int(rng.integers(len(LEADER_FIRST)))]} " \
+               f"{LEADER_LAST[int(rng.integers(len(LEADER_LAST)))]}"
+        return Leader(
+            name=name,
+            martial=float(rng.uniform(0.8, 1.3)),
+            stewardship=float(rng.uniform(0.8, 1.3)),
+            tenure_left=int(rng.integers(BALANCE["leader_tenure_min"],
+                                         BALANCE["leader_tenure_max"])),
+        )
 
 
 @dataclass
@@ -30,6 +51,7 @@ class FactionRuntime:
     doctrine_age: int = 0
     capital: int = -1                      # region id
     war_weariness: Dict[int, float] = field(default_factory=dict)  # per enemy fid
+    leader: Optional[Leader] = None
 
     # rolling metrics for AI + charts
     income: float = 0.0
@@ -42,20 +64,33 @@ class FactionRuntime:
         return TECH_COST_BASE * (TECH_COST_GROWTH ** tier)
 
     def attack_mult(self) -> float:
-        return 1.0 + MIL_ATTACK_PER_TIER * self.tech["military"]
+        mult = 1.0 + MIL_ATTACK_PER_TIER * self.tech["military"]
+        if self.leader is not None:
+            mult *= self.leader.martial
+        return mult
 
     def defense_mult(self) -> float:
-        return 1.0 + MIL_DEFENSE_PER_TIER * self.tech["military"]
+        mult = 1.0 + MIL_DEFENSE_PER_TIER * self.tech["military"]
+        if self.leader is not None:
+            mult *= 0.5 + 0.5 * self.leader.martial
+        return mult
+
+    def stewardship_mult(self) -> float:
+        return self.leader.stewardship if self.leader is not None else 1.0
 
 
 def make_factions() -> List[FactionRuntime]:
-    return [
-        FactionRuntime(
+    out = []
+    for f in FACTIONS:
+        fac = FactionRuntime(
             fid=f.fid, name=f.name, colour=f.colour,
             aggression=f.aggression, greed=f.greed, curiosity=f.curiosity,
         )
-        for f in FACTIONS
-    ]
+        if f.fid == REBEL_FID:
+            fac.alive = False        # rebels are born from uprisings
+            fac.treasury = 0.0
+        out.append(fac)
+    return out
 
 
 # ---------------------------------------------------------------------------
