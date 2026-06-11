@@ -208,6 +208,7 @@ BALANCE = {
     "garrison_fraction": 0.35,      # share of military kept home
     "expansion_army_power": 27.6,   # min power before claiming neutrals
     "doctrine_inertia": 25,         # ticks before doctrine can flip
+    "absorption_chance": 0.010,     # neutral region joining a strong neighbour
 
     # vassalage
     "vassal_max_regions": 6,        # loser this small capitulates instead of peace

@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, TYPE_CHECKING
 import numpy as np
 
 from strategy.data import BALANCE, BUILDINGS, UNITS, TECH_BRANCHES, REBEL_FID
+from strategy.world import WORLD_SCALE
 from strategy.state import Army, FactionRuntime
 from strategy.world import Region
 
@@ -51,7 +52,7 @@ def _update_doctrine(engine: "StrategyEngine", fac: FactionRuntime) -> None:
     scores = {
         "develop": 0.45 + fac.greed * 0.4 + (0.35 if fac.food_balance < 0 else 0.0),
         "expand": (0.55 + 0.5 * fac.aggression) * (1.0 if neutrals_nearby else 0.1)
-                  * (1.5 if my_regions < 14 else 0.5),
+                  * (1.5 if my_regions < 14 * WORLD_SCALE else 0.5),
         "militarize": 0.2 + threat * 1.2 + (0.8 if at_war else 0.0) + fac.aggression * 0.3,
         "science": 0.25 + fac.curiosity * 0.8 - threat * 0.4,
         "defend": threat * 1.6 + (0.5 if at_war else 0.0) - fac.aggression * 0.2,
@@ -375,7 +376,8 @@ def _army_orders(engine: "StrategyEngine", fac: FactionRuntime) -> None:
             else:
                 expeditions.append(a)
         if fac.doctrine != "expand":
-            expeditions = expeditions[:1]      # cautious trickle expansion
+            # cautious trickle expansion, scaled to planet size
+            expeditions = expeditions[:max(1, int(WORLD_SCALE // 3))]
         for a in expeditions:
             if not neutrals:
                 break

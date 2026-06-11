@@ -25,7 +25,7 @@ from strategy.data import (
     ECO_INCOME_PER_TIER, ECO_TRADE_PER_TIER, SCI_RATE_PER_TIER,
     INFRA_PROD_PER_TIER,
 )
-from strategy.world import WorldMap, Region, N_REGIONS, REGION_COLS
+from strategy.world import WorldMap, Region, N_REGIONS, REGION_COLS, WORLD_SCALE
 from strategy.state import FactionRuntime, Army, Leader, make_factions
 from strategy.diplomacy import Diplomacy
 from strategy import combat as combat_mod
@@ -38,7 +38,8 @@ class EngineConfig:
     use_physics: bool = True
     physics_lat: int = 36
     physics_lon: int = 72
-    start_regions_per_faction: int = 6
+    # starting share of the planet scales with world size (~2% each)
+    start_regions_per_faction: int = max(6, int(6 * WORLD_SCALE))
     chart_every: int = 5
 
 
@@ -160,16 +161,20 @@ class StrategyEngine:
         self._movement_tick()
         self._combat_tick()
         self.diplomacy.step(self)
+        self._absorption_tick()
         self._rebellion_tick()
         self._leader_tick()
         self._cleanup()
 
         if self.tick % self.cfg.chart_every == 0:
             self._record_charts()
-        if self.tick % 25 == 0:
+        if self.tick % 50 == 0:
+            # compact keyframe: one char per region ('.' = neutral)
             self.timeline.append({
                 "tick": self.tick,
-                "owner": [r.owner for r in self.world.regions],
+                "owner": "".join(
+                    "." if r.owner < 0 else str(r.owner)
+                    for r in self.world.regions),
             })
 
     # ------------------------------------------------------------------
@@ -274,8 +279,9 @@ class StrategyEngine:
 
             # corruption: big empires leak income through endless bureaucracy
             corruption = min(B["corruption_max"],
-                             B["corruption_per_region"]
-                             * max(0, len(regions) - B["corruption_free_regions"]))
+                             B["corruption_per_region"] / WORLD_SCALE
+                             * max(0, len(regions)
+                                   - B["corruption_free_regions"] * WORLD_SCALE))
             income *= 1.0 - corruption
 
             fac.income = income + trade_income - upkeep
@@ -461,6 +467,36 @@ class StrategyEngine:
                          region=reg.rid, fid=reg.owner)
 
     # ------------------------------------------------------------------
+    # Cultural absorption: neutral border regions drift toward strong,
+    # peaceful neighbours — colonization at planetary scale
+    # ------------------------------------------------------------------
+
+    def _absorption_tick(self) -> None:
+        B = BALANCE
+        chance = B["absorption_chance"]
+        for reg in self.world.regions:
+            if reg.owner != -1:
+                continue
+            counts: Dict[int, int] = {}
+            for n in self.world.neighbours(reg.rid):
+                o = self.world.regions[n].owner
+                if o >= 0 and o != REBEL_FID:
+                    counts[o] = counts.get(o, 0) + 1
+            if not counts:
+                continue
+            fid, n_adj = max(counts.items(), key=lambda kv: kv[1])
+            if n_adj < 2 or not self.factions[fid].alive:
+                continue
+            if self.rng.random() < chance * (n_adj - 1):
+                reg.owner = fid
+                reg.militia = 0.0
+                reg.unrest = min(reg.unrest + 0.05, 1.0)
+                if self.rng.random() < 0.08:    # log a sample, not the flood
+                    self.log("expand",
+                             f"{self.factions[fid].name} peacefully absorbed "
+                             f"region {reg.rid}", fid=fid, region=reg.rid)
+
+    # ------------------------------------------------------------------
     # Rebellions
     # ------------------------------------------------------------------
 
@@ -473,7 +509,7 @@ class StrategyEngine:
         # an oversized rebel state frays: governing is harder than fighting
         rebel_regions = self.world.owned_by(REBEL_FID)
         n_rebel = len(rebel_regions)
-        cap = B["rebel_governance_cap"]
+        cap = int(B["rebel_governance_cap"] * WORLD_SCALE)
         if n_rebel > cap:
             fray = B["rebel_fray_unrest"] * (n_rebel - cap) / cap
             for reg in rebel_regions:

@@ -110,9 +110,10 @@ class Diplomacy:
         winner, loser = (a, b) if score > 0 else (b, a)
 
         # crushing defeat of a small power -> capitulation, not peace
+        from strategy.world import WORLD_SCALE
         loser_regions = len(engine.world.owned_by(loser))
         if (abs(score) >= BALANCE["vassal_war_score"]
-                and 0 < loser_regions <= BALANCE["vassal_max_regions"]
+                and 0 < loser_regions <= int(BALANCE["vassal_max_regions"] * WORLD_SCALE)
                 and loser not in self.vassals
                 and winner not in self.vassals):
             self.wars.discard(pair)

@@ -1,6 +1,6 @@
 """World map: the planet partitioned into strategic regions.
 
-The 72x144 physics grid is grouped into 6x6 cell blocks -> 12x24 = 288
+The 72x144 physics grid is grouped into 2x2 cell blocks -> 36x72 = 2592
 regions. Regions are the atomic unit of ownership, construction, combat
 and movement. Adjacency wraps in longitude.
 """
@@ -12,13 +12,17 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-REGION_ROWS = 12
-REGION_COLS = 24
+REGION_ROWS = 36
+REGION_COLS = 72
 N_REGIONS = REGION_ROWS * REGION_COLS
+
+# scale factor vs the original 288-region world: balance constants that
+# represent "a share of the planet" are multiplied by this in the engine
+WORLD_SCALE = N_REGIONS / 288.0
 
 GRID_LAT = 72
 GRID_LON = 144
-BLOCK = 6  # grid cells per region side
+BLOCK = GRID_LAT // REGION_ROWS  # grid cells per region side
 
 
 @dataclass

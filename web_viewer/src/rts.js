@@ -6,8 +6,8 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 // Constants
 // ---------------------------------------------------------------------------
 
-const REGION_ROWS = 12;
-const REGION_COLS = 24;
+const REGION_ROWS = 36;
+const REGION_COLS = 72;
 const GLOBE_R = 1.0;
 const POLL_MS = 450;
 
@@ -57,7 +57,7 @@ scene.add(sun);
 // Globe with region ownership texture (canvas-painted)
 // ---------------------------------------------------------------------------
 
-const PX = 16;                       // pixels per region cell on the texture
+const PX = 8;                        // pixels per region cell on the texture
 const texCanvas = document.createElement("canvas");
 texCanvas.width = REGION_COLS * PX;
 texCanvas.height = REGION_ROWS * PX;
@@ -94,7 +94,7 @@ scene.add(new THREE.Mesh(
 
 // grid overlay (region boundaries)
 {
-  const gridMat = new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35 });
+  const gridMat = new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.18 });
   const group = new THREE.Group();
   for (let r = 1; r < REGION_ROWS; r++) {
     const lat = -90 + (180 * r) / REGION_ROWS;
@@ -554,7 +554,8 @@ function paintKeyframe(idx) {
   for (let row = 0; row < REGION_ROWS; row++) {
     for (let col = 0; col < REGION_COLS; col++) {
       const rid = row * REGION_COLS + col;
-      const own = kf.owner[rid];
+      const ch = kf.owner[rid];                 // compact string keyframe
+      const own = ch === "." ? -1 : parseInt(ch, 10);
       texCtx.fillStyle = own >= 0 ? colours[own] : (rid % 2 ? NEUTRAL_COLOR : NEUTRAL_BRIGHT);
       texCtx.fillRect(col * PX, (REGION_ROWS - 1 - row) * PX, PX, PX);
     }
