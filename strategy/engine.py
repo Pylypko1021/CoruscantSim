@@ -664,11 +664,24 @@ class StrategyEngine:
     # ------------------------------------------------------------------
 
     def snapshot(self) -> Dict:
+        def building_code(r: Region) -> int:
+            """Compact per-region development code for the viewer:
+            low 4 bits = total buildings (capped 15), high bits = flags
+            for factory/defense/spaceport/lab/citadel."""
+            total = min(sum(r.buildings.values()), 15)
+            mask = ((1 if r.buildings.get("factory") else 0)
+                    | (2 if r.buildings.get("defense") else 0)
+                    | (4 if r.buildings.get("spaceport") else 0)
+                    | (8 if r.buildings.get("lab") else 0)
+                    | (16 if r.buildings.get("citadel") else 0))
+            return total | (mask << 4)
+
         regions_compact = {
             "owner": [r.owner for r in self.world.regions],
             "devastation": [round(r.devastation, 2) for r in self.world.regions],
             "population": [round(r.population, 1) for r in self.world.regions],
             "unrest": [round(r.unrest, 2) for r in self.world.regions],
+            "buildings": [building_code(r) for r in self.world.regions],
         }
         armies = [
             {

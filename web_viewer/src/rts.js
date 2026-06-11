@@ -1,6 +1,11 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -23,6 +28,8 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x05050c);
@@ -36,10 +43,21 @@ controls.dampingFactor = 0.06;
 controls.minDistance = 1.45;
 controls.maxDistance = 6.0;
 
-scene.add(new THREE.AmbientLight(0x8890c0, 0.55));
-const sun = new THREE.DirectionalLight(0xfff2cc, 1.5);
+scene.add(new THREE.AmbientLight(0x8890c0, 0.5));
+const sun = new THREE.DirectionalLight(0xfff2cc, 1.6);
 sun.position.set(4, 2, 3);
 scene.add(sun);
+const fill = new THREE.DirectionalLight(0x4d66c4, 0.35);
+fill.position.set(-4, -1.5, -2);
+scene.add(fill);
+
+// post-processing: subtle bloom makes city lights, beacons and lasers glow
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(window.innerWidth, window.innerHeight), 0.55, 0.6, 0.72);
+composer.addPass(bloomPass);
+composer.addPass(new OutputPass());
 
 // starfield
 {
@@ -57,40 +75,71 @@ scene.add(sun);
 // Globe with region ownership texture (canvas-painted)
 // ---------------------------------------------------------------------------
 
-const PX = 8;                        // pixels per region cell on the texture
+const PX = 16;                       // pixels per region cell on the texture
 const texCanvas = document.createElement("canvas");
-texCanvas.width = REGION_COLS * PX;
-texCanvas.height = REGION_ROWS * PX;
+texCanvas.width = REGION_COLS * PX;   // 1152
+texCanvas.height = REGION_ROWS * PX;  // 576
 const texCtx = texCanvas.getContext("2d");
 const mapTexture = new THREE.CanvasTexture(texCanvas);
 mapTexture.colorSpace = THREE.SRGBColorSpace;
 mapTexture.magFilter = THREE.LinearFilter;
+mapTexture.anisotropy = 4;
 
 const globe = new THREE.Mesh(
-  new THREE.SphereGeometry(GLOBE_R, 96, 64),
-  new THREE.MeshStandardMaterial({ map: mapTexture, roughness: 0.85, metalness: 0.1 }),
+  new THREE.SphereGeometry(GLOBE_R, 128, 96),
+  new THREE.MeshStandardMaterial({ map: mapTexture, roughness: 0.78, metalness: 0.18 }),
 );
 scene.add(globe);
 
-// night-side city lights from the legacy texture set (optional, best effort)
-new THREE.TextureLoader().load(
-  "/data/coruscant_lights_metropolis.jpg",
-  (tex) => {
-    tex.colorSpace = THREE.SRGBColorSpace;
-    globe.material.emissiveMap = tex;
-    globe.material.emissive = new THREE.Color(0xffc878);
-    globe.material.emissiveIntensity = 0.22;
-    globe.material.needsUpdate = true;
-  },
-  undefined,
-  () => { /* texture not present — fine */ },
-);
+// ecumenopolis surface detail: city diffuse painted UNDER faction colors,
+// bump relief + night lights as emissive (all best-effort)
+const texLoader = new THREE.TextureLoader();
+let cityImg = null;                  // HTMLImageElement once loaded
+{
+  const img = new Image();
+  img.onload = () => { cityImg = img; if (latestState) paintRegions(latestState); };
+  img.src = "/data/coruscant_diffuse.jpg";
+}
+texLoader.load("/data/coruscant_bump.jpg", (tex) => {
+  globe.material.bumpMap = tex;
+  globe.material.bumpScale = 0.012;
+  globe.material.needsUpdate = true;
+}, undefined, () => {});
+texLoader.load("/data/coruscant_lights_metropolis.jpg", (tex) => {
+  tex.colorSpace = THREE.SRGBColorSpace;
+  globe.material.emissiveMap = tex;
+  globe.material.emissive = new THREE.Color(0xffc878);
+  globe.material.emissiveIntensity = 0.28;
+  globe.material.needsUpdate = true;
+}, undefined, () => {});
 
-// faint atmosphere shell
-scene.add(new THREE.Mesh(
-  new THREE.SphereGeometry(GLOBE_R * 1.035, 48, 32),
-  new THREE.MeshBasicMaterial({ color: 0x4a6cff, transparent: true, opacity: 0.05, side: THREE.BackSide }),
-));
+// fresnel atmosphere: blue rim glow that breathes with the bloom pass
+{
+  const atmoMat = new THREE.ShaderMaterial({
+    uniforms: { glowColor: { value: new THREE.Color(0x4a7cff) } },
+    vertexShader: `
+      varying float vRim;
+      void main() {
+        vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+        vec3 n = normalize(normalMatrix * normal);
+        vec3 v = normalize(-mvPos.xyz);
+        vRim = 1.0 - abs(dot(n, v));
+        gl_Position = projectionMatrix * mvPos;
+      }`,
+    fragmentShader: `
+      uniform vec3 glowColor;
+      varying float vRim;
+      void main() {
+        float a = pow(vRim, 3.2) * 0.85;
+        gl_FragColor = vec4(glowColor, a);
+      }`,
+    side: THREE.BackSide,
+    blending: THREE.AdditiveBlending,
+    transparent: true,
+    depthWrite: false,
+  });
+  scene.add(new THREE.Mesh(new THREE.SphereGeometry(GLOBE_R * 1.06, 64, 48), atmoMat));
+}
 
 // grid overlay (region boundaries)
 {
@@ -127,36 +176,272 @@ function shade(hex, factor) {
   return `#${c.getHexString()}`;
 }
 
+function paintCityBase() {
+  if (cityImg) {
+    texCtx.globalAlpha = 1.0;
+    texCtx.drawImage(cityImg, 0, 0, texCanvas.width, texCanvas.height);
+    // darken slightly so faction tints read clearly
+    texCtx.fillStyle = "rgba(8, 9, 18, 0.35)";
+    texCtx.fillRect(0, 0, texCanvas.width, texCanvas.height);
+  } else {
+    texCtx.fillStyle = NEUTRAL_COLOR;
+    texCtx.fillRect(0, 0, texCanvas.width, texCanvas.height);
+  }
+}
+
 function paintRegions(state) {
   const { owner, devastation, unrest } = state.regions;
   const colours = {};
   for (const f of state.factions) colours[f.fid] = f.colour;
   const capitals = new Set(state.factions.filter(f => f.alive).map(f => f.capital));
 
+  paintCityBase();
   for (let row = 0; row < REGION_ROWS; row++) {
     for (let col = 0; col < REGION_COLS; col++) {
       const rid = row * REGION_COLS + col;
       const own = owner[rid];
-      let base = own >= 0 ? colours[own] : (rid % 2 ? NEUTRAL_COLOR : NEUTRAL_BRIGHT);
-      let bright = 1.0 - 0.55 * (devastation[rid] || 0);
-      if (own >= 0) bright *= 1.0 - 0.25 * (unrest[rid] || 0);
       // texture v=0 is the top (lat +90) -> row 0 is lat -89..  flip rows
       const y = (REGION_ROWS - 1 - row) * PX;
       const x = col * PX;
-      texCtx.fillStyle = shade(base, bright);
-      texCtx.fillRect(x, y, PX, PX);
+
+      if (own >= 0) {
+        let bright = 1.0 - 0.55 * (devastation[rid] || 0);
+        bright *= 1.0 - 0.25 * (unrest[rid] || 0);
+        texCtx.globalAlpha = 0.52;
+        texCtx.fillStyle = shade(colours[own], bright);
+        texCtx.fillRect(x, y, PX, PX);
+        // crisp border ring so empires read as shapes, not noise
+        texCtx.globalAlpha = 0.85;
+        texCtx.strokeStyle = shade(colours[own], bright * 1.25);
+        texCtx.lineWidth = 1;
+        texCtx.strokeRect(x + 0.5, y + 0.5, PX - 1, PX - 1);
+      } else if (devastation[rid] > 0.05) {
+        texCtx.globalAlpha = 0.4 * devastation[rid];
+        texCtx.fillStyle = "#000000";
+        texCtx.fillRect(x, y, PX, PX);
+      }
+
       if (capitals.has(rid)) {
+        texCtx.globalAlpha = 1.0;
         texCtx.fillStyle = "#ffffff";
         texCtx.beginPath();
-        texCtx.arc(x + PX / 2, y + PX / 2, PX * 0.18, 0, Math.PI * 2);
+        texCtx.arc(x + PX / 2, y + PX / 2, PX * 0.22, 0, Math.PI * 2);
         texCtx.fill();
-        texCtx.strokeStyle = shade(base, 0.4);
-        texCtx.lineWidth = 1.5;
+        texCtx.strokeStyle = colours[owner[rid]] || "#888";
+        texCtx.lineWidth = 2;
         texCtx.stroke();
       }
     }
   }
+  texCtx.globalAlpha = 1.0;
   mapTexture.needsUpdate = true;
+}
+
+// ---------------------------------------------------------------------------
+// City architecture: instanced skylines + landmark buildings per region
+// ---------------------------------------------------------------------------
+
+const SURF = GLOBE_R * 1.001;
+const buildGroup = new THREE.Group();
+scene.add(buildGroup);
+
+// deterministic per-region jitter so towers don't dance between repaints
+function hash01(n) {
+  let x = Math.sin(n * 127.1 + 311.7) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+function regionSurfacePos(rid, jx = 0, jy = 0) {
+  const row = Math.floor(rid / REGION_COLS), col = rid % REGION_COLS;
+  const lat = -89 + (178 * (row + 0.5 + jy * 0.72)) / REGION_ROWS;
+  const lon = (360 * (col + 0.5 + jx * 0.72)) / REGION_COLS;
+  return latLonToVec3(lat, lon, SURF);
+}
+
+// merged landmark geometries (single geometry each -> instanceable)
+function landmarkGeometry(kind) {
+  const parts = [];
+  // toNonIndexed(): mergeGeometries needs uniform attributes (octahedron
+  // is non-indexed while box/cylinder are indexed)
+  const push = (geo, x, y, z, rx = 0) => {
+    if (rx) geo.rotateX(rx);
+    geo.translate(x, y, z);
+    parts.push(geo.toNonIndexed ? geo.toNonIndexed() : geo);
+  };
+  if (kind === "factory") {            // wide hall + two chimneys
+    push(new THREE.BoxGeometry(1.4, 0.5, 1.0), 0, 0.25, 0);
+    push(new THREE.CylinderGeometry(0.12, 0.16, 1.1, 6), -0.45, 0.8, -0.25);
+    push(new THREE.CylinderGeometry(0.12, 0.16, 0.9, 6), -0.1, 0.7, -0.25);
+  } else if (kind === "defense") {     // shield dome + rim
+    push(new THREE.SphereGeometry(0.62, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), 0, 0.1, 0);
+    push(new THREE.CylinderGeometry(0.68, 0.72, 0.18, 12), 0, 0.06, 0);
+  } else if (kind === "spaceport") {   // pad + control tower + ring
+    push(new THREE.CylinderGeometry(0.7, 0.78, 0.12, 10), 0, 0.06, 0);
+    push(new THREE.CylinderGeometry(0.08, 0.1, 1.0, 6), 0.3, 0.6, 0.25);
+    const ring = new THREE.TorusGeometry(0.42, 0.05, 6, 18);
+    ring.rotateX(Math.PI / 2);
+    ring.translate(0, 0.75, 0);
+    parts.push(ring.toNonIndexed());
+  } else if (kind === "lab") {         // research spire + orb
+    push(new THREE.ConeGeometry(0.3, 1.6, 6), 0, 0.8, 0);
+    push(new THREE.SphereGeometry(0.16, 8, 8), 0, 1.7, 0);
+  } else {                             // citadel: bastion + crown
+    push(new THREE.CylinderGeometry(0.55, 0.75, 0.9, 8), 0, 0.45, 0);
+    const crown = new THREE.OctahedronGeometry(0.4);
+    crown.translate(0, 1.15, 0);
+    parts.push(crown.toNonIndexed ? crown.toNonIndexed() : crown);
+  }
+  return BufferGeometryUtils.mergeGeometries(parts);
+}
+
+const LANDMARKS = [
+  { key: "factory",   bit: 1,  scale: 0.011, emissive: 0xff8855 },
+  { key: "defense",   bit: 2,  scale: 0.012, emissive: 0x55ddff },
+  { key: "spaceport", bit: 4,  scale: 0.012, emissive: 0xffffff },
+  { key: "lab",       bit: 8,  scale: 0.011, emissive: 0xcc88ff },
+  { key: "citadel",   bit: 16, scale: 0.015, emissive: 0xffcc44 },
+];
+
+const MAX_TOWERS = 9000, MAX_LANDMARK = 1600;
+const towerMesh = new THREE.InstancedMesh(
+  new THREE.BoxGeometry(1, 1, 1),
+  new THREE.MeshStandardMaterial({ roughness: 0.55, metalness: 0.4,
+    emissive: 0xfff0c0, emissiveIntensity: 0.18 }),
+  MAX_TOWERS,
+);
+towerMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+buildGroup.add(towerMesh);
+
+const landmarkMeshes = {};
+for (const lm of LANDMARKS) {
+  const mesh = new THREE.InstancedMesh(
+    landmarkGeometry(lm.key),
+    new THREE.MeshStandardMaterial({ roughness: 0.45, metalness: 0.45,
+      emissive: lm.emissive, emissiveIntensity: 0.45 }),
+    MAX_LANDMARK,
+  );
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  buildGroup.add(mesh);
+  landmarkMeshes[lm.key] = mesh;
+}
+
+// capital beacons: vertical light pillars + glow sprite
+const beaconGroup = new THREE.Group();
+scene.add(beaconGroup);
+const beacons = new Map();           // fid -> {beam, glow, rid}
+
+function makeBeacon(colourHex) {
+  const colour = new THREE.Color(colourHex);
+  const g = new THREE.Group();
+  const beam = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.006, 0.013, 0.6, 8, 1, true),
+    new THREE.MeshBasicMaterial({ color: colour, transparent: true, opacity: 0.55,
+      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
+  );
+  beam.position.y = 0.3;
+  g.add(beam);
+  const glow = new THREE.Mesh(
+    new THREE.SphereGeometry(0.02, 10, 10),
+    new THREE.MeshBasicMaterial({ color: 0xffffff }),
+  );
+  glow.position.y = 0.012;
+  g.add(glow);
+  return g;
+}
+
+const dummy = new THREE.Object3D();
+const upY = new THREE.Vector3(0, 1, 0);
+let buildingsKey = "";
+
+function syncBuildings(state) {
+  const { owner, buildings } = state.regions;
+  if (!buildings) return;
+  const key = owner.join("") + "|" + buildings.join(",");
+  if (key === buildingsKey) return;          // nothing changed on the surface
+  buildingsKey = key;
+
+  const colours = {};
+  for (const f of state.factions) colours[f.fid] = new THREE.Color(f.colour);
+  const lmCount = Object.fromEntries(LANDMARKS.map(l => [l.key, 0]));
+  let towerCount = 0;
+  const q = new THREE.Quaternion();
+
+  for (let rid = 0; rid < owner.length; rid++) {
+    const own = owner[rid];
+    if (own < 0) continue;
+    const code = buildings[rid] || 0;
+    const total = code & 15;
+    const mask = code >> 4;
+    const colour = colours[own] || new THREE.Color(0xffffff);
+
+    // skyline towers: density follows development
+    const n = Math.min(1 + Math.ceil(total / 2.5), 6);
+    for (let i = 0; i < n && towerCount < MAX_TOWERS; i++) {
+      const jx = hash01(rid * 7 + i * 13) - 0.5;
+      const jy = hash01(rid * 11 + i * 17) - 0.5;
+      const pos = regionSurfacePos(rid, jx, jy);
+      const h = 0.008 + 0.018 * hash01(rid * 3 + i * 29) * (0.5 + total / 12);
+      dummy.position.copy(pos);
+      q.setFromUnitVectors(upY, pos.clone().normalize());
+      dummy.quaternion.copy(q);
+      dummy.scale.set(0.0045, h, 0.0045);
+      dummy.translateY(h / 2);
+      dummy.updateMatrix();
+      towerMesh.setMatrixAt(towerCount, dummy.matrix);
+      towerMesh.setColorAt(towerCount, colour.clone().lerp(new THREE.Color(0xcfd6ff), 0.35));
+      towerCount++;
+    }
+
+    // landmark structures for special buildings
+    for (const lm of LANDMARKS) {
+      if (!(mask & lm.bit) || lmCount[lm.key] >= MAX_LANDMARK) continue;
+      const jx = hash01(rid * 19 + lm.bit) - 0.5;
+      const jy = hash01(rid * 23 + lm.bit * 3) - 0.5;
+      const pos = regionSurfacePos(rid, jx * 0.6, jy * 0.6);
+      dummy.position.copy(pos);
+      q.setFromUnitVectors(upY, pos.clone().normalize());
+      dummy.quaternion.copy(q);
+      dummy.scale.setScalar(lm.scale);
+      dummy.updateMatrix();
+      const mesh = landmarkMeshes[lm.key];
+      mesh.setMatrixAt(lmCount[lm.key], dummy.matrix);
+      mesh.setColorAt(lmCount[lm.key], colour.clone().lerp(new THREE.Color(0xffffff), 0.25));
+      lmCount[lm.key]++;
+    }
+  }
+
+  towerMesh.count = towerCount;
+  towerMesh.instanceMatrix.needsUpdate = true;
+  if (towerMesh.instanceColor) towerMesh.instanceColor.needsUpdate = true;
+  for (const lm of LANDMARKS) {
+    const mesh = landmarkMeshes[lm.key];
+    mesh.count = lmCount[lm.key];
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  }
+
+  // capital beacons follow living factions
+  const aliveCaps = new Map();
+  for (const f of state.factions) {
+    if (f.alive && f.capital >= 0) aliveCaps.set(f.fid, f);
+  }
+  for (const [fid, b] of beacons) {
+    if (!aliveCaps.has(fid)) { beaconGroup.remove(b.group); beacons.delete(fid); }
+  }
+  for (const [fid, f] of aliveCaps) {
+    let b = beacons.get(fid);
+    if (!b) {
+      b = { group: makeBeacon(f.colour), rid: -1 };
+      beaconGroup.add(b.group);
+      beacons.set(fid, b);
+    }
+    if (b.rid !== f.capital) {
+      b.rid = f.capital;
+      const pos = regionSurfacePos(f.capital);
+      b.group.position.copy(pos);
+      b.group.quaternion.setFromUnitVectors(upY, pos.clone().normalize());
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -288,7 +573,7 @@ function syncArmies(state) {
       model.position.copy(pos);
       entry = {
         group: model, target: pos.clone(), from: pos.clone(), t: 1,
-        power: a.power, fid: a.fid, kind,
+        power: a.power, fid: a.fid, kind, phase: Math.random() * Math.PI * 2,
       };
       armyMeshes.set(a.aid, entry);
     }
@@ -336,17 +621,51 @@ function spawnBattleFlashes(state, regionLatLon) {
       for (let i = 0; i < 200; i++) seenBattles.delete(it.next().value);
     }
     const [lat, lon] = regionLatLon(b.region);
+    const pos = latLonToVec3(lat, lon, GLOBE_R * 1.012);
+
+    // shockwave ring
     const mesh = new THREE.Mesh(
       new THREE.RingGeometry(0.012, 0.05, 24),
-      new THREE.MeshBasicMaterial({ color: 0xff5533, transparent: true, opacity: 0.95, side: THREE.DoubleSide }),
+      new THREE.MeshBasicMaterial({ color: 0xff5533, transparent: true, opacity: 0.95,
+        side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }),
     );
-    const pos = latLonToVec3(lat, lon, GLOBE_R * 1.012);
     mesh.position.copy(pos);
     mesh.lookAt(pos.clone().multiplyScalar(2));
     flashGroup.add(mesh);
     flashes.push({ mesh, age: 0 });
+
+    // core flash that blooms
+    const core = new THREE.Mesh(
+      new THREE.SphereGeometry(0.012, 8, 8),
+      new THREE.MeshBasicMaterial({ color: 0xffd9a0, transparent: true, opacity: 1.0,
+        blending: THREE.AdditiveBlending, depthWrite: false }),
+    );
+    core.position.copy(pos);
+    flashGroup.add(core);
+    flashes.push({ mesh: core, age: 0, core: true });
+
+    // debris burst: a handful of particles thrown outward
+    const N = 16;
+    const geo = new THREE.BufferGeometry();
+    const positions = new Float32Array(N * 3);
+    const vels = [];
+    const normal = pos.clone().normalize();
+    for (let i = 0; i < N; i++) {
+      positions.set([pos.x, pos.y, pos.z], i * 3);
+      const v = new THREE.Vector3().randomDirection();
+      v.addScaledVector(normal, 1.2).normalize().multiplyScalar(0.08 + Math.random() * 0.12);
+      vels.push(v);
+    }
+    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    const pts = new THREE.Points(geo, new THREE.PointsMaterial({
+      color: 0xffaa55, size: 0.008, transparent: true, opacity: 1.0,
+      blending: THREE.AdditiveBlending, depthWrite: false }));
+    flashGroup.add(pts);
+    particleBursts.push({ pts, vels, age: 0 });
   }
 }
+
+let particleBursts = [];
 
 // ---------------------------------------------------------------------------
 // Trade route arcs
@@ -551,15 +870,19 @@ function paintKeyframe(idx) {
   if (!kf) return;
   const colours = {};
   for (const f of timelineData.factions) colours[f.fid] = f.colour;
+  paintCityBase();
   for (let row = 0; row < REGION_ROWS; row++) {
     for (let col = 0; col < REGION_COLS; col++) {
       const rid = row * REGION_COLS + col;
       const ch = kf.owner[rid];                 // compact string keyframe
       const own = ch === "." ? -1 : parseInt(ch, 10);
-      texCtx.fillStyle = own >= 0 ? colours[own] : (rid % 2 ? NEUTRAL_COLOR : NEUTRAL_BRIGHT);
+      if (own < 0) continue;
+      texCtx.globalAlpha = 0.55;
+      texCtx.fillStyle = colours[own];
       texCtx.fillRect(col * PX, (REGION_ROWS - 1 - row) * PX, PX, PX);
     }
   }
+  texCtx.globalAlpha = 1.0;
   mapTexture.needsUpdate = true;
   tlLabel.textContent = `tick ${kf.tick}`;
 }
@@ -599,6 +922,7 @@ async function poll() {
     const rll = regionLatLonFactory(state);
     elTick.textContent = `tick ${state.tick}`;
     if (!scrubbing) paintRegions(state);
+    syncBuildings(state);
     syncArmies(state);
     spawnBattleFlashes(state, rll);
     syncTrade(state, rll);
@@ -617,6 +941,9 @@ poll();
 
 const clock = new THREE.Clock();
 
+// debug handle for diagnostics from the console
+window.__rts = { scene, camera, towerMesh, landmarkMeshes, beacons, armyMeshes };
+
 function animate() {
   requestAnimationFrame(animate);
   const dt = clock.getDelta();
@@ -629,8 +956,14 @@ function animate() {
       const dir = slerpVec(entry.from, entry.target, entry.t);
       const hop = 0.06 * Math.sin(Math.PI * entry.t);
       g.position.copy(dir.multiplyScalar(GLOBE_R * 1.045 + hop));
+    } else if (entry.kind === "aircraft" || entry.kind === "fleet") {
+      // air and orbital assets hover with a gentle bob
+      const bob = 0.005 * Math.sin(clock.elapsedTime * 2.0 + entry.phase);
+      g.position.copy(entry.target).normalize()
+        .multiplyScalar(GLOBE_R * 1.045 + bob);
     }
     g.lookAt(0, 0, 0);
+    g.rotateZ(clock.elapsedTime * 0.35 + entry.phase);   // slow display rotation
     if (entry.battle) {
       g.rotation.z += Math.sin(clock.elapsedTime * 30) * 0.05;   // shake in combat
     }
@@ -639,6 +972,12 @@ function animate() {
   // battle flash decay
   flashes = flashes.filter(f => {
     f.age += dt;
+    if (f.core) {
+      f.mesh.scale.setScalar(1 + f.age * 6.0);
+      f.mesh.material.opacity = Math.max(0, 1.0 - f.age * 2.6);
+      if (f.age > 0.4) { flashGroup.remove(f.mesh); f.mesh.geometry.dispose(); f.mesh.material.dispose(); return false; }
+      return true;
+    }
     const s = 1 + f.age * 3.0;
     f.mesh.scale.setScalar(s);
     f.mesh.material.opacity = Math.max(0, 0.95 - f.age * 1.1);
@@ -646,8 +985,33 @@ function animate() {
     return true;
   });
 
+  // debris particles fly outward and fade
+  particleBursts = particleBursts.filter(b => {
+    b.age += dt;
+    const attr = b.pts.geometry.getAttribute("position");
+    for (let i = 0; i < b.vels.length; i++) {
+      attr.setXYZ(i,
+        attr.getX(i) + b.vels[i].x * dt,
+        attr.getY(i) + b.vels[i].y * dt,
+        attr.getZ(i) + b.vels[i].z * dt);
+    }
+    attr.needsUpdate = true;
+    b.pts.material.opacity = Math.max(0, 1.0 - b.age * 1.4);
+    if (b.age > 0.8) {
+      flashGroup.remove(b.pts); b.pts.geometry.dispose(); b.pts.material.dispose();
+      return false;
+    }
+    return true;
+  });
+
+  // capital beacons breathe
+  for (const [, b] of beacons) {
+    const beam = b.group.children[0];
+    beam.material.opacity = 0.4 + 0.2 * Math.sin(clock.elapsedTime * 2.4 + b.rid);
+  }
+
   controls.update();
-  renderer.render(scene, camera);
+  composer.render();
 }
 animate();
 
@@ -655,4 +1019,5 @@ window.addEventListener("resize", () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  composer.setSize(window.innerWidth, window.innerHeight);
 });
