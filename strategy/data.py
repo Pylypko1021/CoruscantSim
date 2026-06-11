@@ -222,6 +222,17 @@ BALANCE = {
     "rebellion_grace_ticks": 200,   # no uprisings while societies settle
     "war_unrest_per_tick": 0.0006,  # war exhaustion felt by civilians
     "rebel_army_per_pop": 0.10,     # rebel infantry per million pop
+    "uprising_cooldown_ticks": 25,  # min gap between separate uprisings planet-wide
+    "rebel_war_weariness_mult": 1.6,  # irregular armies tire of war faster
+    "rebel_governance_cap": 45,     # regions rebels can govern before fraying
+    "rebel_fray_unrest": 0.004,     # extra unrest per tick when overextended (scaled)
+
+    # economy sinks (late-game)
+    "corruption_free_regions": 15,  # empire size with clean books
+    "corruption_per_region": 0.012, # income share lost per region beyond that
+    "corruption_max": 0.45,
+    "hoard_cap": 20000.0,           # treasuries above this start leaking
+    "hoard_decay": 0.004,           # fraction of the excess lost per tick
 
     # leaders
     "leader_tenure_min": 1200,

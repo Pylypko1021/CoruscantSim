@@ -255,6 +255,44 @@ def test_trade_blockade():
 
 
 # ---------------------------------------------------------------------------
+# 9b. Economy sinks: hoard decay + corruption, rebel schism
+# ---------------------------------------------------------------------------
+
+def test_balance_sinks():
+    from strategy.data import BALANCE
+    eng = StrategyEngine(EngineConfig(seed=11, use_physics=False))
+
+    # hoarded wealth above the cap leaks
+    f0 = eng.factions[0]
+    f0.treasury = BALANCE["hoard_cap"] * 3
+    t_before = f0.treasury
+    eng.step()
+    assert_true("hoard decay", f0.treasury < t_before)
+
+    # an oversized rebel state frays and sheds regions
+    old = {k: BALANCE[k] for k in
+           ("rebellion_chance", "rebellion_grace_ticks", "rebel_governance_cap")}
+    BALANCE["rebellion_chance"] = 1.0
+    BALANCE["rebellion_grace_ticks"] = 0
+    BALANCE["rebel_governance_cap"] = 5
+    try:
+        rebels = eng.factions[5]
+        rebels.alive = True
+        grabbed = [r for r in eng.world.regions if r.owner == -1][:12]
+        for r in grabbed:
+            r.owner = 5
+            r.unrest = 0.95
+        rebels.capital = grabbed[0].rid
+        eng.step()
+        still_rebel = sum(1 for r in grabbed if r.owner == 5)
+        assert_true("schism sheds regions", still_rebel < len(grabbed))
+        assert_true("schism logged",
+                    any(ev["type"] == "schism" for ev in eng.events))
+    finally:
+        BALANCE.update(old)
+
+
+# ---------------------------------------------------------------------------
 # 10. Chronicle + notifier formatting
 # ---------------------------------------------------------------------------
 
@@ -313,6 +351,8 @@ if __name__ == "__main__":
     print("ok: rebellion")
     test_trade_blockade()
     print("ok: trade blockade")
+    test_balance_sinks()
+    print("ok: balance sinks (hoard decay + schism)")
     test_chronicle_and_notify()
     print("ok: chronicle + notify")
     test_physics_coupling()

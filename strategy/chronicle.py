@@ -15,13 +15,14 @@ if TYPE_CHECKING:
 
 MAJOR_TYPES = {
     "genesis", "war", "peace", "vassal", "independence", "rebellion",
-    "elimination", "leader", "capital", "alliance", "alliance_end",
+    "elimination", "leader", "capital", "alliance", "alliance_end", "schism",
 }
 
 ICONS = {
     "genesis": "🌍", "war": "⚔️", "peace": "🕊️", "vassal": "⛓️",
     "independence": "🔥", "rebellion": "✊", "elimination": "💀",
     "leader": "👑", "capital": "🏛️", "alliance": "🤝", "alliance_end": "💔",
+    "schism": "🪓",
 }
 
 

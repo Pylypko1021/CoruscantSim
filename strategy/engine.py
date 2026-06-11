@@ -272,8 +272,17 @@ class StrategyEngine:
                     reg.unrest = min(1.0, reg.unrest + B["war_unrest_per_tick"]
                                      + 0.0015 * reg.devastation)
 
+            # corruption: big empires leak income through endless bureaucracy
+            corruption = min(B["corruption_max"],
+                             B["corruption_per_region"]
+                             * max(0, len(regions) - B["corruption_free_regions"]))
+            income *= 1.0 - corruption
+
             fac.income = income + trade_income - upkeep
             fac.treasury = max(0.0, fac.treasury + fac.income)
+            # hoarded wealth above the cap evaporates into graft and waste
+            if fac.treasury > B["hoard_cap"]:
+                fac.treasury -= (fac.treasury - B["hoard_cap"]) * B["hoard_decay"]
             fac.science += science_gain
             fac.prod_pool = min(fac.prod_pool + prod_gain, 600.0)
             fac.food_balance = food_balance_total
@@ -460,6 +469,33 @@ class StrategyEngine:
         if self.tick < B["rebellion_grace_ticks"]:
             return
         rebels = self.factions[REBEL_FID]
+
+        # an oversized rebel state frays: governing is harder than fighting
+        rebel_regions = self.world.owned_by(REBEL_FID)
+        n_rebel = len(rebel_regions)
+        cap = B["rebel_governance_cap"]
+        if n_rebel > cap:
+            fray = B["rebel_fray_unrest"] * (n_rebel - cap) / cap
+            for reg in rebel_regions:
+                reg.unrest = min(1.0, reg.unrest + fray)
+        for reg in rebel_regions:
+            if reg.unrest >= B["rebellion_unrest"] and \
+                    self.rng.random() < B["rebellion_chance"]:
+                reg.owner = -1
+                reg.militia = 25.0 + 0.05 * reg.population
+                reg.unrest = 0.3
+                reg.construction.clear()
+                self.log("schism",
+                         f"Region {reg.rid} splinters from Free Coruscant — "
+                         f"the revolution devours its own",
+                         fid=REBEL_FID, region=reg.rid)
+                self.handle_capital_loss(REBEL_FID, reg.rid)
+                self.check_faction_elimination(REBEL_FID)
+
+        # uprisings against the powers (planet-wide pacing cooldown)
+        if self.tick - getattr(self, "_last_uprising_tick", -10**9) < \
+                B["uprising_cooldown_ticks"]:
+            return
         for reg in self.world.regions:
             if reg.owner < 0 or reg.owner == REBEL_FID:
                 continue
@@ -467,6 +503,7 @@ class StrategyEngine:
                 continue
             if self.rng.random() >= B["rebellion_chance"]:
                 continue
+            self._last_uprising_tick = self.tick
 
             old_owner = reg.owner
             reg.owner = REBEL_FID
@@ -498,6 +535,7 @@ class StrategyEngine:
 
             self.diplomacy.declare_war(self, REBEL_FID, old_owner, "uprising")
             self.check_faction_elimination(old_owner)
+            break                       # at most one uprising per tick
 
     # ------------------------------------------------------------------
     # Leaders

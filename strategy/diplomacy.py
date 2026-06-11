@@ -6,7 +6,7 @@ from typing import Dict, List, Set, Tuple, TYPE_CHECKING
 
 import numpy as np
 
-from strategy.data import BALANCE, FACTIONS
+from strategy.data import BALANCE, FACTIONS, REBEL_FID
 
 if TYPE_CHECKING:
     from strategy.engine import StrategyEngine
@@ -199,6 +199,8 @@ class Diplomacy:
                 rate = B["weariness_per_tick"]
                 if score < -0.5:
                     rate *= B["weariness_losing_mult"]
+                if fid == REBEL_FID:
+                    rate *= B["rebel_war_weariness_mult"]
                 f.war_weariness[other] = f.war_weariness.get(other, 0.0) + rate
             if (fa.war_weariness.get(b, 0) > B["peace_weariness"]
                     and fb.war_weariness.get(a, 0) > B["peace_weariness"] * 0.6) or \
