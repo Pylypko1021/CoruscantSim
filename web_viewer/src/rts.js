@@ -6,6 +6,7 @@ import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUtils.js";
+import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -25,7 +26,7 @@ const NEUTRAL_BRIGHT = "#2e3150";
 
 const canvas = document.getElementById("scene");
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -55,7 +56,7 @@ scene.add(fill);
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
 const bloomPass = new UnrealBloomPass(
-  new THREE.Vector2(window.innerWidth, window.innerHeight), 0.55, 0.6, 0.72);
+  new THREE.Vector2(window.innerWidth / 2, window.innerHeight / 2), 0.55, 0.6, 0.72);
 composer.addPass(bloomPass);
 composer.addPass(new OutputPass());
 
@@ -452,13 +453,21 @@ const armyGroup = new THREE.Group();
 scene.add(armyGroup);
 const armyMeshes = new Map();      // aid -> {group, target, from, t, ...}
 
-// Optional GLB models: drop files into web_viewer/models/{infantry,armor,aircraft,fleet}.glb
-// and they replace the procedural meshes automatically.
+// GLB models (Quaternius CC0 packs) for armies; drop replacements into
+// web_viewer/models/{infantry,armor,aircraft,fleet}.glb any time.
 const gltfLoader = new GLTFLoader();
+gltfLoader.setMeshoptDecoder(MeshoptDecoder);
 const glbScenes = {};              // kind -> THREE.Group
 for (const kind of ["infantry", "armor", "aircraft", "fleet"]) {
   gltfLoader.load(`/models/${kind}.glb`,
-    (g) => { glbScenes[kind] = g.scene; },
+    (g) => {
+      // wrap so the model lies tangent to the globe under marker lookAt()
+      const wrap = new THREE.Group();
+      const inner = g.scene;
+      inner.rotation.x = -Math.PI / 2;
+      wrap.add(inner);
+      glbScenes[kind] = wrap;
+    },
     undefined, () => { /* no model file — procedural fallback */ });
 }
 
@@ -480,11 +489,11 @@ function makeArmyModel(colourHex, power, kind = "infantry") {
     const model = glbScenes[kind].clone(true);
     const box = new THREE.Box3().setFromObject(model);
     const size = box.getSize(new THREE.Vector3()).length() || 1;
-    model.scale.setScalar((s * 3.2) / size);
+    model.scale.setScalar((s * 4.2) / size);
     model.traverse((o) => {
       if (o.isMesh && o.material) {
         o.material = o.material.clone();
-        if (o.material.color) o.material.color.lerp(colour, 0.45);
+        if (o.material.color) o.material.color.lerp(colour, 0.32);
       }
     });
     return model;
@@ -942,7 +951,7 @@ poll();
 const clock = new THREE.Clock();
 
 // debug handle for diagnostics from the console
-window.__rts = { scene, camera, towerMesh, landmarkMeshes, beacons, armyMeshes };
+window.__rts = { scene, camera, controls, towerMesh, landmarkMeshes, beacons, armyMeshes };
 
 function animate() {
   requestAnimationFrame(animate);

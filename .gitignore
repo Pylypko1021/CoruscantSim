@@ -28,3 +28,5 @@ rts_save.json
 output_headless_*.json
 strategy/balance_results.tsv
 chronicle.md
+
+web_viewer/models/preview/
