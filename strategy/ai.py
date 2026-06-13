@@ -29,8 +29,10 @@ def faction_ai_step(engine: "StrategyEngine", fac: FactionRuntime) -> None:
         return
     _update_doctrine(engine, fac)
     _research(engine, fac)
+    _heritage(engine, fac)
     _construct(engine, fac)
     _recruit(engine, fac)
+    _envoys(engine, fac)
     _consider_war(engine, fac)
     _army_orders(engine, fac)
 
@@ -111,7 +113,9 @@ def _research(engine: "StrategyEngine", fac: FactionRuntime) -> None:
     for b in TECH_BRANCHES:
         if fac.tech[b] >= 6:
             weights[b] = 0.0
+
     if all(w == 0.0 for w in weights.values()):
+        _future_tech(engine, fac)            # tree maxed -> endless research sink
         return
     fac.research_target = max(weights, key=weights.get)
 
@@ -124,6 +128,71 @@ def _research(engine: "StrategyEngine", fac: FactionRuntime) -> None:
         name = TECH_NAMES[fac.research_target][min(tier - 1, 5)]
         engine.log("tech", f"{fac.name} researched {name} "
                            f"({fac.research_target} tier {tier})", fid=fac.fid)
+
+
+def _future_tech(engine: "StrategyEngine", fac: FactionRuntime) -> None:
+    """Once every branch is maxed, science fuels endless compounding tech."""
+    from strategy.data import FUTURE_TECH_NAMES
+    cost = BALANCE["future_tech_base_cost"] * (BALANCE["future_tech_growth"] ** fac.future_tech)
+    if fac.science >= cost:
+        fac.science -= cost
+        fac.future_tech += 1
+        fac.research_target = "future"
+        name = FUTURE_TECH_NAMES[(fac.future_tech - 1) % len(FUTURE_TECH_NAMES)]
+        gen = (fac.future_tech - 1) // len(FUTURE_TECH_NAMES) + 1
+        suffix = f" mk.{gen}" if gen > 1 else ""
+        engine.log("tech", f"{fac.name} achieved {name}{suffix} "
+                           f"(future tech {fac.future_tech})", fid=fac.fid)
+
+
+def _heritage(engine: "StrategyEngine", fac: FactionRuntime) -> None:
+    """Spend accumulated heritage on the next civics perk it can afford."""
+    from strategy.data import HERITAGE_TRACK
+    for key, cost, name, _effect in HERITAGE_TRACK:
+        if key in fac.heritage_unlocked:
+            continue
+        if fac.heritage >= cost:
+            fac.heritage -= cost
+            fac.heritage_unlocked.add(key)
+            engine.log("heritage", f"{fac.name} embraced {name}", fid=fac.fid)
+        return                                # unlock strictly in order
+
+
+def _envoys(engine: "StrategyEngine", fac: FactionRuntime) -> None:
+    """Court a city-state with gold to win its patronage bonus. Prefers one
+    matching the faction's bent that it does not already lead."""
+    B = BALANCE
+    if not engine.city_states or fac.treasury < B["envoy_treasury_floor"]:
+        return
+    cap = fac.capital
+    if cap < 0:
+        return
+    cap_reg = engine.world.regions[cap]
+
+    pref = {
+        "develop": "trade", "expand": "militarist", "militarize": "militarist",
+        "science": "science", "defend": "cultural",
+    }.get(fac.doctrine, "trade")
+
+    best, best_score = None, -1e9
+    for cs in engine.city_states:
+        reg = engine.world.regions[cs.rid]
+        if reg.owner >= 0 or not reg.is_city_state:
+            continue
+        mine = cs.influence.get(fac.fid, 0.0)
+        lead = max((v for f, v in cs.influence.items() if f != fac.fid), default=0.0)
+        if cs.suzerain == fac.fid and mine > lead + 30:
+            continue                          # already safely ours
+        dist = abs(reg.row - cap_reg.row) + abs(reg.col - cap_reg.col)
+        score = (3.0 if cs.kind == pref else 0.0) - 0.05 * dist - 0.02 * mine
+        if cs.suzerain >= 0 and cs.suzerain != fac.fid:
+            score += 1.0                      # contest rivals
+        if score > best_score:
+            best_score, best = score, cs
+    if best is None:
+        return
+    fac.treasury -= B["envoy_cost"]
+    best.influence[fac.fid] = best.influence.get(fac.fid, 0.0) + B["envoy_influence"]
 
 
 # ---------------------------------------------------------------------------

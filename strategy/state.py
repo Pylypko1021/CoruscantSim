@@ -53,6 +53,11 @@ class FactionRuntime:
     war_weariness: Dict[int, float] = field(default_factory=dict)  # per enemy fid
     leader: Optional[Leader] = None
 
+    # culture / progress
+    future_tech: int = 0                   # post-tree research levels
+    heritage: float = 0.0                  # accumulated culture points
+    heritage_unlocked: set = field(default_factory=set)  # heritage perk keys
+
     # rolling metrics for AI + charts
     income: float = 0.0
     food_balance: float = 0.0
@@ -63,20 +68,40 @@ class FactionRuntime:
         tier = self.tech[branch]
         return TECH_COST_BASE * (TECH_COST_GROWTH ** tier)
 
+    def future_power_mult(self) -> float:
+        m = 1.0 + BALANCE["future_tech_power"] * self.future_tech
+        if "manifest" in self.heritage_unlocked:
+            m *= 1.06
+        return m
+
     def attack_mult(self) -> float:
         mult = 1.0 + MIL_ATTACK_PER_TIER * self.tech["military"]
         if self.leader is not None:
             mult *= self.leader.martial
-        return mult
+        return mult * self.future_power_mult()
 
     def defense_mult(self) -> float:
         mult = 1.0 + MIL_DEFENSE_PER_TIER * self.tech["military"]
         if self.leader is not None:
             mult *= 0.5 + 0.5 * self.leader.martial
-        return mult
+        if "martial_trad" in self.heritage_unlocked:
+            mult *= 1.12
+        return mult * self.future_power_mult()
 
     def stewardship_mult(self) -> float:
         return self.leader.stewardship if self.leader is not None else 1.0
+
+    def income_mult(self) -> float:
+        """Heritage + future-tech multipliers on income."""
+        m = 1.0 + BALANCE["future_tech_income"] * self.future_tech
+        if "golden_age" in self.heritage_unlocked:
+            m *= 1.12
+        if "manifest" in self.heritage_unlocked:
+            m *= 1.06
+        return m
+
+    def science_mult(self) -> float:
+        return 1.18 if "enlightenment" in self.heritage_unlocked else 1.0
 
 
 def make_factions() -> List[FactionRuntime]:
@@ -91,6 +116,28 @@ def make_factions() -> List[FactionRuntime]:
             fac.treasury = 0.0
         out.append(fac)
     return out
+
+
+# ---------------------------------------------------------------------------
+# City-states — independent minor powers; patronize for a per-tick bonus
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CityState:
+    rid: int
+    name: str
+    kind: str                                   # science|trade|industrial|cultural|militarist
+    influence: Dict[int, float] = field(default_factory=dict)   # fid -> influence
+    suzerain: int = -1
+
+    def recompute_suzerain(self, min_inf: float) -> int:
+        prev = self.suzerain
+        if self.influence:
+            best_fid, best = max(self.influence.items(), key=lambda kv: kv[1])
+            self.suzerain = best_fid if best >= min_inf else -1
+        else:
+            self.suzerain = -1
+        return prev
 
 
 # ---------------------------------------------------------------------------

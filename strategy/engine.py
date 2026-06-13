@@ -26,7 +26,11 @@ from strategy.data import (
     INFRA_PROD_PER_TIER,
 )
 from strategy.world import WorldMap, Region, N_REGIONS, REGION_COLS, WORLD_SCALE
-from strategy.state import FactionRuntime, Army, Leader, make_factions
+from strategy.state import FactionRuntime, Army, Leader, CityState, make_factions
+from strategy.data import (
+    CITY_STATE_TYPES, CITY_STATE_NAMES, HERITAGE_TRACK, HERITAGE_BY_KEY,
+    FUTURE_TECH_NAMES,
+)
 from strategy.diplomacy import Diplomacy
 from strategy import combat as combat_mod
 from strategy import ai as ai_mod
@@ -52,6 +56,8 @@ class StrategyEngine:
         self.world = WorldMap(self.rng)
         self.factions: List[FactionRuntime] = make_factions()
         self.armies: List[Army] = []
+        self.city_states: List[CityState] = []
+        self.city_state_by_rid: Dict[int, CityState] = {}
         self.diplomacy = Diplomacy(self.rng)
         self.events: deque = deque(maxlen=2000)
         self.event_seq = 0                      # monotonic id for consumers
@@ -128,7 +134,45 @@ class StrategyEngine:
             capital.population *= 2.0
             self.armies.append(Army.new(fac.fid, best.rid, {"infantry": 6}, "garrison"))
 
+        self._seed_city_states()
         self.log("genesis", "Five powers rise from the endless city of Coruscant")
+
+    def _seed_city_states(self) -> None:
+        """Scatter independent minor powers across neutral regions, away from
+        capitals, each a different archetype patrons compete to court."""
+        # sub-linear scaling: ~40 on the big world, not one per few regions
+        n = max(5, int(BALANCE["city_states"] * WORLD_SCALE ** 0.55))
+        capitals = [f.capital for f in self.factions if f.capital >= 0]
+        neutral = [r for r in self.world.regions if r.owner == -1]
+
+        def far_from_caps(reg):
+            return min((abs(reg.row - self.world.regions[c].row)
+                        + abs(reg.col - self.world.regions[c].col)) for c in capitals) \
+                if capitals else 99
+
+        # prefer well-spaced, capital-distant regions
+        neutral.sort(key=far_from_caps, reverse=True)
+        kinds = list(CITY_STATE_TYPES.keys())
+        chosen: List[Region] = []
+        for reg in neutral:
+            if len(chosen) >= n:
+                break
+            # keep them spread out
+            if any(abs(reg.row - c.row) + abs(reg.col - c.col) < 4 for c in chosen):
+                continue
+            chosen.append(reg)
+
+        names = list(CITY_STATE_NAMES)
+        for i, reg in enumerate(chosen):
+            kind = kinds[i % len(kinds)]
+            name = names[i] if i < len(names) else f"Outpost {i}"
+            reg.is_city_state = True
+            reg.militia = max(reg.militia, 45.0)      # minor powers defend themselves
+            reg.population = max(reg.population, 60.0)
+            reg.buildings = {"reactor": 1, "farm": 1}
+            cs = CityState(rid=reg.rid, name=name, kind=kind)
+            self.city_states.append(cs)
+            self.city_state_by_rid[reg.rid] = cs
 
     # ------------------------------------------------------------------
     # Logging
@@ -158,6 +202,7 @@ class StrategyEngine:
         for fac in self.factions:
             ai_mod.faction_ai_step(self, fac)
 
+        self._culture_tick()
         self._movement_tick()
         self._combat_tick()
         self.diplomacy.step(self)
@@ -233,7 +278,8 @@ class StrategyEngine:
                     growth = B["pop_growth_rate"] * (1.0 - reg.unrest) * (1.0 - reg.devastation)
                     growth *= max(0.0, 1.0 - reg.population / pop_cap)
                     reg.population *= 1.0 + growth
-                    reg.unrest = max(0.0, reg.unrest - 0.004)
+                    cool = 0.004 * (1.8 if "civic_order" in fac.heritage_unlocked else 1.0)
+                    reg.unrest = max(0.0, reg.unrest - cool)
                 reg.devastation = max(0.0, reg.devastation - 0.002)   # slow repair
 
                 income += reg.population * B["tax_per_pop"] * (1.0 - reg.unrest) * eco_mult
@@ -269,7 +315,7 @@ class StrategyEngine:
                         (1.0 + ECO_TRADE_PER_TIER * fac.tech["economy"]) * \
                         min(trade_capacity / 10.0 + 0.5, 3.0)
 
-            income *= fac.stewardship_mult()
+            income *= fac.stewardship_mult() * fac.income_mult()
 
             # war exhaustion: long wars erode civilian patience
             if self.diplomacy.enemies_of(fac.fid):
@@ -289,9 +335,18 @@ class StrategyEngine:
             # hoarded wealth above the cap evaporates into graft and waste
             if fac.treasury > B["hoard_cap"]:
                 fac.treasury -= (fac.treasury - B["hoard_cap"]) * B["hoard_decay"]
-            fac.science += science_gain
+            fac.science += science_gain * fac.science_mult()
             fac.prod_pool = min(fac.prod_pool + prod_gain, 600.0)
             fac.food_balance = food_balance_total
+
+            # heritage accrues from population, infrastructure and culture perks
+            heritage_gain = 0.0
+            for reg in regions:
+                heritage_gain += reg.population * B["heritage_per_pop"] * (
+                    1.0 + B["heritage_infra_bonus"] * reg.infrastructure)
+            if "manifest" in fac.heritage_unlocked:
+                heritage_gain *= 1.06
+            fac.heritage += heritage_gain
             fac.gdp = income + trade_income
             fac.military_power = sum(
                 a.attack_power(fac.attack_mult())
@@ -467,6 +522,56 @@ class StrategyEngine:
                          region=reg.rid, fid=reg.owner)
 
     # ------------------------------------------------------------------
+    # City-states: influence decay, suzerain resolution, patron bonuses
+    # ------------------------------------------------------------------
+
+    def _culture_tick(self) -> None:
+        B = BALANCE
+        for cs in self.city_states:
+            reg = self.world.regions[cs.rid]
+            # a conquered city-state stops being independent
+            if reg.owner >= 0 or not reg.is_city_state:
+                reg.is_city_state = False
+                continue
+
+            for fid in list(cs.influence.keys()):
+                cs.influence[fid] = max(0.0, cs.influence[fid] * (1.0 - B["cs_influence_decay"]))
+
+            prev = cs.recompute_suzerain(B["cs_suzerain_min"])
+            suz = cs.suzerain
+            if suz != prev:
+                if suz >= 0:
+                    self.log("city_state",
+                             f"{self.factions[suz].name} became patron of "
+                             f"{cs.name} ({CITY_STATE_TYPES[cs.kind]['title']})",
+                             fid=suz, region=cs.rid)
+            if suz < 0 or not self.factions[suz].alive:
+                continue
+
+            patron = self.factions[suz]
+            if cs.kind == "science":
+                patron.science += B["cs_science"]
+            elif cs.kind == "trade":
+                patron.treasury += B["cs_income"]
+            elif cs.kind == "industrial":
+                patron.prod_pool = min(patron.prod_pool + B["cs_prod"], 600.0)
+            elif cs.kind == "cultural":
+                patron.heritage += B["cs_heritage"]
+            elif cs.kind == "militarist" and patron.capital >= 0:
+                # trickle reinforcements into the patron's capital garrison
+                if self.rng.random() < B["cs_power_recruit"]:
+                    self._reinforce_capital(patron, 1)
+
+    def _reinforce_capital(self, fac: FactionRuntime, n_inf: int) -> None:
+        for a in self.armies:
+            if a.fid == fac.fid and a.location == fac.capital and \
+                    a.stance in ("garrison", "defend") and not a.path:
+                a.composition["infantry"] = a.composition.get("infantry", 0) + n_inf
+                return
+        if fac.capital >= 0:
+            self.armies.append(Army.new(fac.fid, fac.capital, {"infantry": n_inf}, "garrison"))
+
+    # ------------------------------------------------------------------
     # Cultural absorption: neutral border regions drift toward strong,
     # peaceful neighbours — colonization at planetary scale
     # ------------------------------------------------------------------
@@ -475,8 +580,8 @@ class StrategyEngine:
         B = BALANCE
         chance = B["absorption_chance"]
         for reg in self.world.regions:
-            if reg.owner != -1:
-                continue
+            if reg.owner != -1 or reg.is_city_state:
+                continue                       # city-states stay independent
             counts: Dict[int, int] = {}
             for n in self.world.neighbours(reg.rid):
                 o = self.world.regions[n].owner
@@ -716,8 +821,21 @@ class StrategyEngine:
                             "stewardship": round(f.leader.stewardship, 2)}
                            if f.leader else None),
                 "suzerain": self.diplomacy.suzerain_of(f.fid),
+                "future_tech": f.future_tech,
+                "heritage": round(f.heritage, 0),
+                "heritage_unlocked": sorted(f.heritage_unlocked),
             }
             for f in self.factions
+        ]
+        city_states = [
+            {
+                "rid": cs.rid, "name": cs.name, "kind": cs.kind,
+                "lat": self.world.regions[cs.rid].lat,
+                "lon": self.world.regions[cs.rid].lon,
+                "suzerain": cs.suzerain,
+                "active": self.world.regions[cs.rid].is_city_state,
+            }
+            for cs in self.city_states
         ]
         return {
             "tick": self.tick,
@@ -726,6 +844,7 @@ class StrategyEngine:
             "regions": regions_compact,
             "armies": armies,
             "factions": factions,
+            "city_states": city_states,
             "diplomacy": self.diplomacy.snapshot(),
             "battles": list(self.battles_recent)[-25:],
             "events": list(self.events)[-40:],
@@ -743,10 +862,22 @@ class StrategyEngine:
 
     def region_detail(self, rid: int) -> Dict:
         r = self.world.regions[rid]
+        cs = self.city_state_by_rid.get(rid) if r.is_city_state else None
+        city_state = None
+        if cs is not None:
+            city_state = {
+                "name": cs.name, "kind": cs.kind,
+                "suzerain": cs.suzerain,
+                "suzerain_name": self.factions[cs.suzerain].name if cs.suzerain >= 0 else None,
+                "influence": {self.factions[f].name.split(" ")[0]: round(v, 1)
+                              for f, v in sorted(cs.influence.items(), key=lambda kv: -kv[1])[:5]},
+            }
         return {
             "rid": r.rid, "lat": r.lat, "lon": r.lon,
             "owner": r.owner,
-            "owner_name": self.factions[r.owner].name if r.owner >= 0 else "Neutral",
+            "city_state": city_state,
+            "owner_name": (f"{cs.name} (city-state)" if cs is not None
+                           else self.factions[r.owner].name if r.owner >= 0 else "Neutral"),
             "population": round(r.population, 1),
             "unrest": round(r.unrest, 2),
             "devastation": round(r.devastation, 2),
@@ -783,6 +914,7 @@ class StrategyEngine:
                     "buildings": r.buildings,
                     "construction": r.construction,
                     "stock": r.stock,
+                    "is_city_state": r.is_city_state,
                 }
                 for r in self.world.regions
             ],
@@ -797,8 +929,17 @@ class StrategyEngine:
                                 "stewardship": f.leader.stewardship,
                                 "tenure_left": f.leader.tenure_left}
                                if f.leader else None),
+                    "future_tech": f.future_tech,
+                    "heritage": f.heritage,
+                    "heritage_unlocked": sorted(f.heritage_unlocked),
                 }
                 for f in self.factions
+            ],
+            "city_states": [
+                {"rid": cs.rid, "name": cs.name, "kind": cs.kind,
+                 "influence": {str(k): v for k, v in cs.influence.items()},
+                 "suzerain": cs.suzerain}
+                for cs in self.city_states
             ],
             "armies": [
                 {
@@ -836,6 +977,7 @@ class StrategyEngine:
                         "devastation", "militia", "entrenchment", "fertility",
                         "materials_richness", "energy_potential"):
                 setattr(r, key, rdata[key])
+            r.is_city_state = rdata.get("is_city_state", False)
             r.buildings = {k: int(v) for k, v in rdata["buildings"].items()}
             r.construction = rdata["construction"]
             r.stock = rdata["stock"]
@@ -854,6 +996,18 @@ class StrategyEngine:
             f.leader = Leader(name=ld["name"], martial=ld["martial"],
                               stewardship=ld["stewardship"],
                               tenure_left=ld["tenure_left"]) if ld else None
+            f.future_tech = fdata.get("future_tech", 0)
+            f.heritage = fdata.get("heritage", 0.0)
+            f.heritage_unlocked = set(fdata.get("heritage_unlocked", []))
+
+        engine.city_states = []
+        engine.city_state_by_rid = {}
+        for cdata in data.get("city_states", []):
+            cs = CityState(rid=cdata["rid"], name=cdata["name"], kind=cdata["kind"],
+                           influence={int(k): v for k, v in cdata["influence"].items()},
+                           suzerain=cdata.get("suzerain", -1))
+            engine.city_states.append(cs)
+            engine.city_state_by_rid[cs.rid] = cs
 
         for adata in data["armies"]:
             army = Army(aid=adata["aid"], fid=adata["fid"],

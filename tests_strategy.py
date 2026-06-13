@@ -293,6 +293,65 @@ def test_balance_sinks():
 
 
 # ---------------------------------------------------------------------------
+# 9c. City-states, heritage track, future tech (science sink)
+# ---------------------------------------------------------------------------
+
+def test_culture_systems():
+    eng = StrategyEngine(EngineConfig(seed=7, use_physics=False))
+
+    # city-states seeded as independent neutral minor powers
+    assert_true("city-states exist", len(eng.city_states) >= 5)
+    for cs in eng.city_states:
+        reg = eng.world.regions[cs.rid]
+        assert_true("city-state region neutral", reg.owner == -1)
+        assert_true("city-state flagged", reg.is_city_state)
+        assert_true("city-state kind valid",
+                    cs.kind in ("science", "trade", "industrial", "cultural", "militarist"))
+
+    # patronage forms over time and grants the suzerain something
+    for _ in range(1500):
+        eng.step()
+    patroned = [c for c in eng.city_states if c.suzerain >= 0]
+    assert_true("some city-states patroned", len(patroned) > 0)
+
+    # heritage accumulates and the civics track unlocks in order
+    any_heritage = any(f.heritage_unlocked for f in eng.factions if f.alive)
+    assert_true("heritage unlocked somewhere", any_heritage)
+    from strategy.data import HERITAGE_TRACK
+    order = [h[0] for h in HERITAGE_TRACK]
+    for f in eng.factions:
+        if not f.heritage_unlocked:
+            continue
+        idxs = sorted(order.index(k) for k in f.heritage_unlocked)
+        assert_true("heritage unlocked as a prefix", idxs == list(range(len(idxs))))
+
+    # future tech only after the whole tree is maxed, and it drains science
+    for f in eng.factions:
+        if f.future_tech > 0:
+            assert_true("future tech needs maxed tree",
+                        all(v >= 6 for v in f.tech.values()))
+
+    # absorption never eats a city-state
+    for cs in eng.city_states:
+        reg = eng.world.regions[cs.rid]
+        assert_true("city-state not absorbed (still neutral or conquered, never absorbed-neutral)",
+                    reg.owner != -1 or reg.is_city_state)
+
+    # serialization round-trips the new state
+    import os, tempfile
+    p = os.path.join(tempfile.gettempdir(), "coruscant_culture_save.json")
+    eng.save(p)
+    eng2 = StrategyEngine.load(p)
+    assert_true("city-states reload", len(eng2.city_states) == len(eng.city_states))
+    assert_true("future tech reload",
+                [f.future_tech for f in eng2.factions] == [f.future_tech for f in eng.factions])
+    assert_true("heritage reload",
+                [sorted(f.heritage_unlocked) for f in eng2.factions]
+                == [sorted(f.heritage_unlocked) for f in eng.factions])
+    os.remove(p)
+
+
+# ---------------------------------------------------------------------------
 # 10. Chronicle + notifier formatting
 # ---------------------------------------------------------------------------
 
@@ -353,6 +412,8 @@ if __name__ == "__main__":
     print("ok: trade blockade")
     test_balance_sinks()
     print("ok: balance sinks (hoard decay + schism)")
+    test_culture_systems()
+    print("ok: culture systems (city-states + heritage + future tech)")
     test_chronicle_and_notify()
     print("ok: chronicle + notify")
     test_physics_coupling()

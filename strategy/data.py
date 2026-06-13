@@ -233,9 +233,82 @@ BALANCE = {
     "corruption_per_region": 0.012, # income share lost per region beyond that
     "corruption_max": 0.45,
     "hoard_cap": 20000.0,           # treasuries above this start leaking
-    "hoard_decay": 0.004,           # fraction of the excess lost per tick
+    "hoard_decay": 0.012,           # fraction of the excess lost per tick
 
     # leaders
     "leader_tenure_min": 1200,
     "leader_tenure_max": 3500,
+
+    # future tech (science sink once the tree is maxed)
+    "future_tech_base_cost": 4000.0,
+    "future_tech_growth": 1.18,
+    "future_tech_income": 0.015,    # +1.5% income per future level
+    "future_tech_power": 0.010,     # +1.0% military per future level
+
+    # heritage / culture
+    "heritage_per_pop": 0.00040,    # heritage points per million pop per tick
+    "heritage_infra_bonus": 0.5,    # extra per infrastructure level
+    "heritage_cultural_cs": 0.6,    # bonus per cultural city-state patronage
+
+    # city-states
+    "city_states": 14,              # base count (scaled by world size)
+    "envoy_cost": 55.0,             # credits per envoy
+    "envoy_influence": 6.0,         # influence gained per envoy
+    "envoy_treasury_floor": 900.0,  # only send envoys above this treasury
+    "cs_influence_decay": 0.004,    # per-tick influence decay
+    "cs_suzerain_min": 25.0,        # min influence to be suzerain
+    "cs_science": 2.2,              # per-tick patron bonus (science type)
+    "cs_income": 4.0,               # (trade type)
+    "cs_prod": 1.6,                 # (industrial type)
+    "cs_heritage": 0.5,             # (cultural type)
+    "cs_power_recruit": 0.6,        # (militarist type) infantry/tick to suzerain garrison
 }
+
+
+# ---------------------------------------------------------------------------
+# Future tech names (cosmetic, for the event log)
+# ---------------------------------------------------------------------------
+
+FUTURE_TECH_NAMES = [
+    "Fusion Lattices", "Sentient Grids", "Gravitic Engineering",
+    "Quantum Logistics", "Exotic Matter", "Dyson Swarms",
+    "Mind-Net Uplink", "Hyperspace Theory", "Nano-Forges",
+    "Stellar Husbandry",
+]
+
+
+# ---------------------------------------------------------------------------
+# Heritage / civics track — spend accumulated heritage to unlock perks.
+# (key, cost, display name, one-line effect)
+# ---------------------------------------------------------------------------
+
+HERITAGE_TRACK = [
+    ("civic_order",   220.0,  "Civic Order",       "unrest cools 80% faster"),
+    ("golden_age",    420.0,  "Golden Age",        "+12% income"),
+    ("martial_trad",  680.0,  "Martial Tradition", "+12% defense"),
+    ("pioneer",       980.0,  "Pioneer Spirit",    "colonizes & absorbs faster"),
+    ("enlightenment", 1380.0, "Enlightenment",     "+18% science"),
+    ("manifest",      1900.0, "Manifest Destiny",  "+6% income, power & culture"),
+]
+HERITAGE_BY_KEY = {h[0]: h for h in HERITAGE_TRACK}
+
+
+# ---------------------------------------------------------------------------
+# City-state archetypes — independent minor powers a faction can patronize
+# for a per-tick bonus (highest influence = suzerain).
+# ---------------------------------------------------------------------------
+
+CITY_STATE_TYPES = {
+    "science":    {"colour": "#9b6cff", "title": "Academy"},
+    "trade":      {"colour": "#33cc88", "title": "Free Port"},
+    "industrial": {"colour": "#ff9933", "title": "Foundry"},
+    "cultural":   {"colour": "#ffcc44", "title": "Sanctuary"},
+    "militarist": {"colour": "#ff5555", "title": "Garrison"},
+}
+
+CITY_STATE_NAMES = [
+    "Ord Mantell", "Taris", "Nar Shaddaa", "Corellia", "Sluis Van",
+    "Bespin", "Kuat", "Fondor", "Eriadu", "Denon", "Bothawui",
+    "Rodia", "Malastare", "Sullust", "Bestine", "Chandrila",
+    "Commenor", "Ithor", "Telos", "Carida",
+]

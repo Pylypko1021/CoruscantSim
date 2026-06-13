@@ -44,6 +44,7 @@ class Region:
     devastation: float = 0.0
     militia: float = 25.0            # neutral defenders
     entrenchment: float = 0.0        # defender bonus, grows while calm
+    is_city_state: bool = False      # independent minor power (see CityState)
     buildings: Dict[str, int] = field(default_factory=dict)
     construction: List[Dict] = field(default_factory=list)   # {key, ticks_left}
     stock: Dict[str, float] = field(default_factory=lambda: {
