@@ -7,6 +7,8 @@ import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
+import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
+import { KTX2Loader } from "three/examples/jsm/loaders/KTX2Loader.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -41,8 +43,9 @@ camera.position.set(0, 1.4, 2.6);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.06;
-controls.minDistance = 1.45;
+controls.minDistance = 1.08;     // dive close enough to read the cityscape
 controls.maxDistance = 6.0;
+controls.zoomSpeed = 1.2;
 
 scene.add(new THREE.AmbientLight(0x8890c0, 0.5));
 const sun = new THREE.DirectionalLight(0xfff2cc, 1.6);
@@ -259,51 +262,67 @@ function regionSurfacePos(rid, jx = 0, jy = 0) {
   return latLonToVec3(lat, lon, SURF);
 }
 
-// merged landmark geometries (single geometry each -> instanceable)
-function landmarkGeometry(kind) {
-  const parts = [];
-  // toNonIndexed(): mergeGeometries needs uniform attributes (octahedron
-  // is non-indexed while box/cylinder are indexed)
-  const push = (geo, x, y, z, rx = 0) => {
-    if (rx) geo.rotateX(rx);
-    geo.translate(x, y, z);
-    parts.push(geo.toNonIndexed ? geo.toNonIndexed() : geo);
-  };
-  if (kind === "factory") {            // wide hall + two chimneys
-    push(new THREE.BoxGeometry(1.4, 0.5, 1.0), 0, 0.25, 0);
-    push(new THREE.CylinderGeometry(0.12, 0.16, 1.1, 6), -0.45, 0.8, -0.25);
-    push(new THREE.CylinderGeometry(0.12, 0.16, 0.9, 6), -0.1, 0.7, -0.25);
-  } else if (kind === "defense") {     // shield dome + rim
-    push(new THREE.SphereGeometry(0.62, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), 0, 0.1, 0);
-    push(new THREE.CylinderGeometry(0.68, 0.72, 0.18, 12), 0, 0.06, 0);
-  } else if (kind === "spaceport") {   // pad + control tower + ring
-    push(new THREE.CylinderGeometry(0.7, 0.78, 0.12, 10), 0, 0.06, 0);
-    push(new THREE.CylinderGeometry(0.08, 0.1, 1.0, 6), 0.3, 0.6, 0.25);
-    const ring = new THREE.TorusGeometry(0.42, 0.05, 6, 18);
-    ring.rotateX(Math.PI / 2);
-    ring.translate(0, 0.75, 0);
-    parts.push(ring.toNonIndexed());
-  } else if (kind === "lab") {         // research spire + orb
-    push(new THREE.ConeGeometry(0.3, 1.6, 6), 0, 0.8, 0);
-    push(new THREE.SphereGeometry(0.16, 8, 8), 0, 1.7, 0);
-  } else {                             // citadel: bastion + crown
-    push(new THREE.CylinderGeometry(0.55, 0.75, 0.9, 8), 0, 0.45, 0);
-    const crown = new THREE.OctahedronGeometry(0.4);
-    crown.translate(0, 1.15, 0);
-    parts.push(crown.toNonIndexed ? crown.toNonIndexed() : crown);
-  }
-  return BufferGeometryUtils.mergeGeometries(parts);
+// Shared GLB loader with every decoder (Meshopt + Draco + KTX2). Used for
+// both building silhouettes and army unit models.
+const gltfLoader = new GLTFLoader();
+gltfLoader.setMeshoptDecoder(MeshoptDecoder);
+{
+  const draco = new DRACOLoader();
+  draco.setDecoderPath("https://unpkg.com/three@0.164.1/examples/jsm/libs/draco/");
+  gltfLoader.setDRACOLoader(draco);
+  const ktx2 = new KTX2Loader()
+    .setTranscoderPath("https://unpkg.com/three@0.164.1/examples/jsm/libs/basis/")
+    .detectSupport(renderer);
+  gltfLoader.setKTX2Loader(ktx2);
 }
 
-const LANDMARKS = [
-  { key: "factory",   bit: 1,  scale: 0.011, emissive: 0xff8855 },
-  { key: "defense",   bit: 2,  scale: 0.012, emissive: 0x55ddff },
-  { key: "spaceport", bit: 4,  scale: 0.012, emissive: 0xffffff },
-  { key: "lab",       bit: 8,  scale: 0.011, emissive: 0xcc88ff },
-  { key: "citadel",   bit: 16, scale: 0.015, emissive: 0xffcc44 },
-];
+// Bake a GLB's meshes into ONE normalized geometry (base at y=0, centered in
+// x/z, max dimension = 1) — position+normal only, ready for InstancedMesh.
+function loadInstanceGeometry(url) {
+  return new Promise((resolve) => {
+    gltfLoader.load(url, (g) => {
+      g.scene.updateMatrixWorld(true);
+      const geos = [];
+      g.scene.traverse((o) => {
+        if (o.isMesh && o.geometry) {
+          let geo = o.geometry.clone();
+          geo.applyMatrix4(o.matrixWorld);
+          if (geo.index) geo = geo.toNonIndexed();
+          const keep = new THREE.BufferGeometry();
+          keep.setAttribute("position", geo.getAttribute("position"));
+          geos.push(keep);                      // position-only -> always mergeable
+        }
+      });
+      if (!geos.length) return resolve(null);
+      let merged = geos.length === 1 ? geos[0] : BufferGeometryUtils.mergeGeometries(geos);
+      if (!merged) merged = geos[0];
+      merged.computeVertexNormals();
+      merged.computeBoundingBox();
+      let bb = merged.boundingBox;
+      merged.translate(-(bb.min.x + bb.max.x) / 2, -bb.min.y, -(bb.min.z + bb.max.z) / 2);
+      merged.computeBoundingBox();
+      const size = new THREE.Vector3();
+      merged.boundingBox.getSize(size);
+      const maxd = Math.max(size.x, size.y, size.z) || 1;
+      merged.scale(1 / maxd, 1 / maxd, 1 / maxd);
+      resolve(merged);
+    }, undefined, () => resolve(null));
+  });
+}
 
-const MAX_TOWERS = 9000, MAX_LANDMARK = 1600;
+// Landmark buildings: real Quaternius silhouettes, faction-tinted, LOD-capped
+// to the nearest-to-camera instances so the triangle budget stays bounded no
+// matter how huge the world grows.
+const LANDMARKS = [
+  { key: "factory",   bit: 1,  file: "factory.glb",  scale: 0.015, emissive: 0xff8855 },
+  { key: "defense",   bit: 2,  file: "dome.glb",     scale: 0.016, emissive: 0x55ddff },
+  { key: "spaceport", bit: 4,  file: "platform.glb", scale: 0.018, emissive: 0xffffff },
+  { key: "lab",       bit: 8,  file: "tower_b.glb",  scale: 0.015, emissive: 0xcc88ff },
+  { key: "citadel",   bit: 16, file: "platform.glb", scale: 0.024, emissive: 0xffcc44 },
+];
+const LANDMARK_CAP = 140;        // nearest instances rendered per type
+
+const MAX_TOWERS = 7000;
 const towerMesh = new THREE.InstancedMesh(
   new THREE.BoxGeometry(1, 1, 1),
   new THREE.MeshStandardMaterial({ roughness: 0.55, metalness: 0.4,
@@ -313,17 +332,26 @@ const towerMesh = new THREE.InstancedMesh(
 towerMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
 buildGroup.add(towerMesh);
 
+const placeholderGeo = new THREE.BoxGeometry(1, 1, 1);
 const landmarkMeshes = {};
 for (const lm of LANDMARKS) {
   const mesh = new THREE.InstancedMesh(
-    landmarkGeometry(lm.key),
-    new THREE.MeshStandardMaterial({ roughness: 0.45, metalness: 0.45,
-      emissive: lm.emissive, emissiveIntensity: 0.45 }),
-    MAX_LANDMARK,
+    placeholderGeo,
+    new THREE.MeshStandardMaterial({ roughness: 0.5, metalness: 0.45,
+      emissive: lm.emissive, emissiveIntensity: 0.14 }),
+    LANDMARK_CAP,
   );
+  mesh.count = 0;
   mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  mesh.frustumCulled = false;
   buildGroup.add(mesh);
   landmarkMeshes[lm.key] = mesh;
+}
+// swap in the real silhouettes as they decode
+for (const lm of LANDMARKS) {
+  loadInstanceGeometry(`/models/buildings/${lm.file}`).then((geo) => {
+    if (geo) { landmarkMeshes[lm.key].geometry = geo; landmarkLODDirty = true; }
+  });
 }
 
 // capital beacons: vertical light pillars + glow sprite
@@ -352,7 +380,11 @@ function makeBeacon(colourHex) {
 
 const dummy = new THREE.Object3D();
 const upY = new THREE.Vector3(0, 1, 0);
+const q = new THREE.Quaternion();
 let buildingsKey = "";
+let landmarkLODDirty = true;
+const landmarkRegions = {};      // key -> [{ pos, colour }]
+const WHITE = new THREE.Color(0xffffff);
 
 function syncBuildings(state) {
   const { owner, buildings } = state.regions;
@@ -363,9 +395,8 @@ function syncBuildings(state) {
 
   const colours = {};
   for (const f of state.factions) colours[f.fid] = new THREE.Color(f.colour);
-  const lmCount = Object.fromEntries(LANDMARKS.map(l => [l.key, 0]));
+  for (const lm of LANDMARKS) landmarkRegions[lm.key] = [];
   let towerCount = 0;
-  const q = new THREE.Quaternion();
 
   for (let rid = 0; rid < owner.length; rid++) {
     const own = owner[rid];
@@ -393,33 +424,20 @@ function syncBuildings(state) {
       towerCount++;
     }
 
-    // landmark structures for special buildings
+    // record landmark sites (placed by the LOD pass, nearest-to-camera first)
     for (const lm of LANDMARKS) {
-      if (!(mask & lm.bit) || lmCount[lm.key] >= MAX_LANDMARK) continue;
+      if (!(mask & lm.bit)) continue;
       const jx = hash01(rid * 19 + lm.bit) - 0.5;
       const jy = hash01(rid * 23 + lm.bit * 3) - 0.5;
       const pos = regionSurfacePos(rid, jx * 0.6, jy * 0.6);
-      dummy.position.copy(pos);
-      q.setFromUnitVectors(upY, pos.clone().normalize());
-      dummy.quaternion.copy(q);
-      dummy.scale.setScalar(lm.scale);
-      dummy.updateMatrix();
-      const mesh = landmarkMeshes[lm.key];
-      mesh.setMatrixAt(lmCount[lm.key], dummy.matrix);
-      mesh.setColorAt(lmCount[lm.key], colour.clone().lerp(new THREE.Color(0xffffff), 0.25));
-      lmCount[lm.key]++;
+      landmarkRegions[lm.key].push({ pos, colour: colour.clone().lerp(WHITE, 0.22) });
     }
   }
 
   towerMesh.count = towerCount;
   towerMesh.instanceMatrix.needsUpdate = true;
   if (towerMesh.instanceColor) towerMesh.instanceColor.needsUpdate = true;
-  for (const lm of LANDMARKS) {
-    const mesh = landmarkMeshes[lm.key];
-    mesh.count = lmCount[lm.key];
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  }
+  landmarkLODDirty = true;
 
   // capital beacons follow living factions
   const aliveCaps = new Map();
@@ -445,30 +463,66 @@ function syncBuildings(state) {
   }
 }
 
+// Place each landmark type's nearest-to-camera instances (bounded triangle
+// budget). Called when the building data changes or the camera moves.
+function refreshLandmarkLOD() {
+  const camPos = camera.position;
+  for (const lm of LANDMARKS) {
+    const list = landmarkRegions[lm.key] || [];
+    let items = list;
+    if (list.length > LANDMARK_CAP) {
+      items = list
+        .map((it) => ({ it, d: it.pos.distanceToSquared(camPos) }))
+        .sort((a, b) => a.d - b.d)
+        .slice(0, LANDMARK_CAP)
+        .map((x) => x.it);
+    }
+    const mesh = landmarkMeshes[lm.key];
+    let n = 0;
+    for (const it of items) {
+      dummy.position.copy(it.pos);
+      q.setFromUnitVectors(upY, it.pos.clone().normalize());
+      dummy.quaternion.copy(q);
+      dummy.scale.setScalar(lm.scale);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(n, dummy.matrix);
+      mesh.setColorAt(n, it.colour);
+      n++;
+    }
+    mesh.count = n;
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  }
+  landmarkLODDirty = false;
+}
+
 // ---------------------------------------------------------------------------
-// Army markers: procedural low-poly models, one group per army
+// Army markers: Quaternius CC0 models with per-type variants
 // ---------------------------------------------------------------------------
 
 const armyGroup = new THREE.Group();
 scene.add(armyGroup);
 const armyMeshes = new Map();      // aid -> {group, target, from, t, ...}
 
-// GLB models (Quaternius CC0 packs) for armies; drop replacements into
-// web_viewer/models/{infantry,armor,aircraft,fleet}.glb any time.
-const gltfLoader = new GLTFLoader();
-gltfLoader.setMeshoptDecoder(MeshoptDecoder);
-const glbScenes = {};              // kind -> THREE.Group
-for (const kind of ["infantry", "armor", "aircraft", "fleet"]) {
-  gltfLoader.load(`/models/${kind}.glb`,
-    (g) => {
-      // wrap so the model lies tangent to the globe under marker lookAt()
+// Per-type unit variants (Quaternius CC0). Add more GLBs to
+// web_viewer/models/units/ and extend the lists; the procedural shapes cover
+// any variant that fails to load.
+const UNIT_VARIANTS = {
+  infantry: ["infantry_a", "infantry_b"],
+  armor:    ["armor_a", "armor_b"],
+  aircraft: ["aircraft_a", "aircraft_b", "aircraft_c"],
+  fleet:    ["fleet_a", "fleet_b", "fleet_c", "fleet_d"],
+};
+const glbVariants = { infantry: [], armor: [], aircraft: [], fleet: [] };
+for (const kind in UNIT_VARIANTS) {
+  UNIT_VARIANTS[kind].forEach((file, idx) => {
+    gltfLoader.load(`/models/units/${file}.glb`, (g) => {
       const wrap = new THREE.Group();
-      const inner = g.scene;
-      inner.rotation.x = -Math.PI / 2;
-      wrap.add(inner);
-      glbScenes[kind] = wrap;
-    },
-    undefined, () => { /* no model file — procedural fallback */ });
+      g.scene.rotation.x = -Math.PI / 2;     // lie tangent under marker lookAt()
+      wrap.add(g.scene);
+      glbVariants[kind][idx] = wrap;
+    }, undefined, () => { /* procedural fallback */ });
+  });
 }
 
 function dominantUnit(comp) {
@@ -481,12 +535,13 @@ function dominantUnit(comp) {
   return best;
 }
 
-function makeArmyModel(colourHex, power, kind = "infantry") {
+function makeArmyModel(colourHex, power, kind = "infantry", variant = 0) {
   const colour = new THREE.Color(colourHex);
   const s = Math.min(0.016 + Math.sqrt(Math.max(power, 1)) * 0.0035, 0.06);
 
-  if (glbScenes[kind]) {
-    const model = glbScenes[kind].clone(true);
+  const avail = (glbVariants[kind] || []).filter(Boolean);
+  if (avail.length) {
+    const model = avail[variant % avail.length].clone(true);
     const box = new THREE.Box3().setFromObject(model);
     const size = box.getSize(new THREE.Vector3()).length() || 1;
     model.scale.setScalar((s * 4.2) / size);
@@ -577,7 +632,7 @@ function syncArmies(state) {
     const kind = dominantUnit(a.comp);
     let entry = armyMeshes.get(a.aid);
     if (!entry) {
-      const model = makeArmyModel(colours[a.fid] || "#ffffff", a.power, kind);
+      const model = makeArmyModel(colours[a.fid] || "#ffffff", a.power, kind, a.aid);
       armyGroup.add(model);
       model.position.copy(pos);
       entry = {
@@ -595,7 +650,7 @@ function syncArmies(state) {
     entry.battle = a.in_battle;
     if (Math.abs(entry.power - a.power) > entry.power * 0.3 || entry.kind !== kind) {
       armyGroup.remove(entry.group);
-      entry.group = makeArmyModel(colours[a.fid] || "#ffffff", a.power, kind);
+      entry.group = makeArmyModel(colours[a.fid] || "#ffffff", a.power, kind, a.aid);
       entry.group.position.copy(entry.target).normalize().multiplyScalar(GLOBE_R * 1.045);
       armyGroup.add(entry.group);
       entry.power = a.power;
@@ -953,9 +1008,23 @@ const clock = new THREE.Clock();
 // debug handle for diagnostics from the console
 window.__rts = { scene, camera, controls, towerMesh, landmarkMeshes, beacons, armyMeshes };
 
+let lodTimer = 0;
+const lastCamPos = new THREE.Vector3();
+
 function animate() {
   requestAnimationFrame(animate);
   const dt = clock.getDelta();
+
+  // landmark LOD: refresh nearest-to-camera buildings on data change or after
+  // the camera has moved, throttled so sorting stays cheap
+  lodTimer += dt;
+  if (lodTimer > 0.25) {
+    lodTimer = 0;
+    if (landmarkLODDirty || camera.position.distanceToSquared(lastCamPos) > 2e-4) {
+      refreshLandmarkLOD();
+      lastCamPos.copy(camera.position);
+    }
+  }
 
   // armies travel along great-circle arcs with a small altitude hop
   for (const [, entry] of armyMeshes) {

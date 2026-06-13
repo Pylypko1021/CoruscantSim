@@ -30,9 +30,15 @@
       import { KTX2Loader } from "three/examples/jsm/loaders/KTX2Loader.js";
 
       const MODELS = [
-        "walker_gun", "cyber_tank", "rover1", "rover2", "enemy_large_gun",
-        "flyer_gun", "striker", "imperial", "executioner", "turret_cannon",
-        "turret_double", "base_large", "geodome", "building_l",
+        // buildings
+        "bld_base_large", "bld_building_tall", "bld_dome", "bld_cylinder",
+        "bld_house_long", "bld_house_single", "bld_house_open", "bld_solar",
+        "bld_connector", "bld_metalsupport",
+        // units
+        "unit_inf_walker", "unit_inf_walker_gun", "unit_armor_heavy",
+        "unit_armor_heavy_gun", "unit_air_striker", "unit_air_spitfire",
+        "unit_air_insurgent", "unit_fleet_executioner", "unit_fleet_imperial",
+        "unit_fleet_omen", "unit_fleet_zenith",
       ];
       const grid = document.getElementById("grid");
       const loader = new GLTFLoader();
@@ -72,6 +78,9 @@
         controls.enableDamping = true;
 
         loader.load(`/models/preview/${name}.glb`, (g) => {
+          let tris = 0;
+          g.scene.traverse(o => { if (o.isMesh && o.geometry) { const i = o.geometry.index; tris += i ? i.count/3 : o.geometry.getAttribute('position').count/3; } });
+          window.__tris = window.__tris || {}; window.__tris[name] = Math.round(tris);
           const model = g.scene;
           const box = new THREE.Box3().setFromObject(model);
           const c = box.getCenter(new THREE.Vector3());
