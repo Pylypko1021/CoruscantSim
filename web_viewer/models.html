@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Model Review — CoruscantSim</title>
+    <style>
+      body { background: #0a0a14; color: #ccd; font-family: system-ui, sans-serif; margin: 0; }
+      h1 { font-size: 16px; padding: 10px 16px; margin: 0; color: #ffd060; }
+      #grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; padding: 8px; }
+      .cell { background: #11142a; border: 1px solid #232645; border-radius: 8px; overflow: hidden; }
+      .cell canvas { width: 100%; height: 190px; display: block; }
+      .cell .label { padding: 5px 8px; font-size: 12px; color: #ffd060; text-align: center; }
+    </style>
+  </head>
+  <body>
+    <h1>Model candidates — drag any cell to rotate</h1>
+    <div id="grid"></div>
+    <script type="importmap">
+      { "imports": {
+          "three": "https://unpkg.com/three@0.164.1/build/three.module.js",
+          "three/examples/jsm/": "https://unpkg.com/three@0.164.1/examples/jsm/"
+      } }
+    </script>
+    <script type="module">
+      import * as THREE from "three";
+      import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+      import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+      import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
+      import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
+      import { KTX2Loader } from "three/examples/jsm/loaders/KTX2Loader.js";
+
+      const MODELS = [
+        // buildings
+        "bld_base_large", "bld_building_tall", "bld_dome", "bld_cylinder",
+        "bld_house_long", "bld_house_single", "bld_house_open", "bld_solar",
+        "bld_connector", "bld_metalsupport",
+        // units
+        "unit_inf_walker", "unit_inf_walker_gun", "unit_armor_heavy",
+        "unit_armor_heavy_gun", "unit_air_striker", "unit_air_spitfire",
+        "unit_air_insurgent", "unit_fleet_executioner", "unit_fleet_imperial",
+        "unit_fleet_omen", "unit_fleet_zenith",
+      ];
+      const grid = document.getElementById("grid");
+      const loader = new GLTFLoader();
+      loader.setMeshoptDecoder(MeshoptDecoder);
+      const draco = new DRACOLoader();
+      draco.setDecoderPath("https://unpkg.com/three@0.164.1/examples/jsm/libs/draco/");
+      loader.setDRACOLoader(draco);
+      const probeRenderer = new THREE.WebGLRenderer();
+      const ktx2 = new KTX2Loader()
+        .setTranscoderPath("https://unpkg.com/three@0.164.1/examples/jsm/libs/basis/")
+        .detectSupport(probeRenderer);
+      probeRenderer.dispose();
+      loader.setKTX2Loader(ktx2);
+
+      for (const name of MODELS) {
+        const cell = document.createElement("div");
+        cell.className = "cell";
+        const cv = document.createElement("canvas");
+        cell.appendChild(cv);
+        const label = document.createElement("div");
+        label.className = "label";
+        label.textContent = name;
+        cell.appendChild(label);
+        grid.appendChild(cell);
+
+        const renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true });
+        renderer.setSize(240, 190, false);
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x11142a);
+        const cam = new THREE.PerspectiveCamera(40, 240 / 190, 0.01, 100);
+        scene.add(new THREE.AmbientLight(0xaab, 1.1));
+        const sun = new THREE.DirectionalLight(0xffeecc, 2.2);
+        sun.position.set(3, 4, 2);
+        scene.add(sun);
+        const controls = new OrbitControls(cam, cv);
+        controls.enableDamping = true;
+
+        loader.load(`/models/preview/${name}.glb`, (g) => {
+          let tris = 0;
+          g.scene.traverse(o => { if (o.isMesh && o.geometry) { const i = o.geometry.index; tris += i ? i.count/3 : o.geometry.getAttribute('position').count/3; } });
+          window.__tris = window.__tris || {}; window.__tris[name] = Math.round(tris);
+          const model = g.scene;
+          const box = new THREE.Box3().setFromObject(model);
+          const c = box.getCenter(new THREE.Vector3());
+          const size = box.getSize(new THREE.Vector3()).length() || 1;
+          model.position.sub(c);
+          const s = 2.0 / size;
+          model.scale.setScalar(s);
+          scene.add(model);
+          cam.position.set(1.4, 1.0, 1.6);
+          cam.lookAt(0, 0, 0);
+          label.textContent = `${name} ✓`;
+        }, undefined, () => { label.textContent = `${name} ✗ load failed`; });
+
+        (function loop() {
+          requestAnimationFrame(loop);
+          scene.children.forEach(o => { if (o.type === "Group") o.rotation.y += 0.01; });
+          controls.update();
+          renderer.render(scene, cam);
+        })();
+      }
+    </script>
+  </body>
+</html>
